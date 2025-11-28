@@ -1,4 +1,4 @@
-use crate::Problem;
+use crate::{Clause, Problem};
 
 /// Parses DIMACS CNF format from a byte slice.
 /// Because Mmap implements Deref<[u8]>, this works with memory mapped files naturally.
@@ -27,13 +27,18 @@ pub fn parse_dimacs(data: &[u8]) -> Result<Problem, String> {
         .parse_usize()
         .ok_or_else(|| "Expected number of clauses".to_string())?;
 
-    // Allocate the Arena
+    // Create the Problem with a reserved vector for clauses
     let mut problem = Problem::new(num_vars, num_clauses);
 
     iter.skip_ascii_whitespace();
 
-    // Populate the Arena
-    for clause_idx in 0..num_clauses {
+    // Populate the Clauses
+    for _ in 0..num_clauses {
+        // Initialize a new clause with a single FixedBitSet large enough for both polarities.
+        // 0..num_vars = positive literals
+        // num_vars..2*num_vars = negative literals
+        let mut clause = Clause::new(num_vars * 2);
+
         loop {
             iter.skip_ascii_whitespace();
 
@@ -64,15 +69,19 @@ pub fn parse_dimacs(data: &[u8]) -> Result<Problem, String> {
                 ));
             }
 
-            // Calculate exact bit position in the flat arena
-            let arena_index = (clause_idx * num_vars) + var_idx;
-
-            if is_negated {
-                problem.arena_neg.set(arena_index, true);
+            // Map literals to the single bitset:
+            // Positive x_i -> bit i
+            // Negative x_i -> bit i + num_vars
+            let bit_index = if is_negated {
+                var_idx + num_vars
             } else {
-                problem.arena_pos.set(arena_index, true);
-            }
+                var_idx
+            };
+
+            clause.literals.insert(bit_index);
         }
+
+        problem.clauses.push(clause);
     }
 
     Ok(problem)

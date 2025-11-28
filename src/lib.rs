@@ -1,26 +1,22 @@
 pub mod parser;
 pub mod utils;
-use bitvec::{bitvec, order::Lsb0, slice::BitSlice, vec::BitVec};
+
+use fixedbitset::FixedBitSet;
 use std::{collections::HashSet, fmt};
 
 #[derive(Debug, Clone)]
 pub struct Problem {
     pub num_vars: usize,
     pub num_clauses: usize,
-    arena_pos: BitVec<usize, Lsb0>,
-    arena_neg: BitVec<usize, Lsb0>,
+    pub clauses: Vec<Clause>,
 }
 
 impl Problem {
     pub fn new(num_vars: usize, num_clauses: usize) -> Self {
-        let total_bits = num_vars
-            .checked_mul(num_clauses)
-            .expect("Problem too large");
         Problem {
             num_vars,
             num_clauses,
-            arena_pos: bitvec![usize, Lsb0; 0; total_bits],
-            arena_neg: bitvec![usize, Lsb0; 0; total_bits],
+            clauses: Vec::with_capacity(num_clauses),
         }
     }
 
@@ -32,17 +28,14 @@ impl Problem {
 
     fn dpll(&self, mut assignment: Assignment) -> Option<Vec<bool>> {
         // 1. UNIT PROPAGATION
-        // We loop until no more unit clauses are found
         loop {
             let mut made_change = false;
             let mut unit_lits = HashSet::new();
 
-            // Scan all clauses to find units or conflicts
-            for clause in self.clauses() {
+            for clause in &self.clauses {
                 match self.evaluate_clause(clause, &assignment) {
                     ClauseStatus::Conflict => return None, // Backtrack immediately
                     ClauseStatus::Unit(var, val) => {
-                        // Determine if we have a contradiction within this propagation step
                         if let Some(existing) = assignment[var] {
                             if existing != val {
                                 return None;
@@ -69,7 +62,7 @@ impl Problem {
         }
 
         // 2. CHECK IF ALL CLAUSES SATISFIED
-        let all_satisfied = self.clauses().all(|c| {
+        let all_satisfied = self.clauses.iter().all(|c| {
             matches!(
                 self.evaluate_clause(c, &assignment),
                 ClauseStatus::Satisfied
@@ -77,12 +70,10 @@ impl Problem {
         });
 
         if all_satisfied {
-            // Fill any remaining None values with default (false) and return
             return Some(assignment.into_iter().map(|x| x.unwrap_or(false)).collect());
         }
 
         // 3. BRANCHING (Heuristic: Pick first unassigned variable)
-        // Find the first index that is None
         let branch_var = assignment.iter().position(|x| x.is_none());
 
         if let Some(var_idx) = branch_var {
@@ -94,7 +85,7 @@ impl Problem {
             }
 
             // Try False
-            let mut right_branch = assignment; // Reuse the vector ownership
+            let mut right_branch = assignment;
             right_branch[var_idx] = Some(false);
             return self.dpll(right_branch);
         }
@@ -102,30 +93,37 @@ impl Problem {
         None
     }
 
-    fn evaluate_clause(&self, clause: ClauseView, assignment: &Assignment) -> ClauseStatus {
+    fn evaluate_clause(&self, clause: &Clause, assignment: &Assignment) -> ClauseStatus {
         let mut unassigned_count = 0;
         let mut last_unassigned = None;
+        let num_vars = self.num_vars;
 
-        // Check positive literals
-        for i in clause.pos.iter_ones() {
-            match assignment[i] {
-                Some(true) => return ClauseStatus::Satisfied, // Clause is true
-                Some(false) => continue,                      // Literal is false, keep looking
-                None => {
-                    unassigned_count += 1;
-                    last_unassigned = Some((i, true)); // Needs True to satisfy
+        // Iterate over set bits (literals present in the clause)
+        for i in clause.literals.ones() {
+            // Determine variable index and polarity based on bit position
+            // 0..num_vars -> Positive (true)
+            // num_vars..2*num_vars -> Negative (false)
+            let (var_idx, is_positive_literal) = if i < num_vars {
+                (i, true)
+            } else {
+                (i - num_vars, false)
+            };
+
+            match assignment[var_idx] {
+                Some(val) => {
+                    // If the assignment matches the literal's polarity, the clause is satisfied.
+                    // (e.g. var is true, literal is positive -> true == true -> satisfied)
+                    // (e.g. var is false, literal is negative -> false == false -> satisfied)
+                    if val == is_positive_literal {
+                        return ClauseStatus::Satisfied;
+                    }
+                    // If val != is_positive_literal, this literal evaluates to false.
+                    // We simply continue to the next literal.
                 }
-            }
-        }
-
-        // Check negative literals
-        for i in clause.neg.iter_ones() {
-            match assignment[i] {
-                Some(false) => return ClauseStatus::Satisfied, // Clause is true (Not False = True)
-                Some(true) => continue, // Literal is false (Not True = False)
                 None => {
                     unassigned_count += 1;
-                    last_unassigned = Some((i, false)); // Needs False to satisfy
+                    // To satisfy this literal, the variable must match the literal's polarity
+                    last_unassigned = Some((var_idx, is_positive_literal));
                 }
             }
         }
@@ -139,60 +137,55 @@ impl Problem {
             _ => ClauseStatus::Unresolved,
         }
     }
-
-    /// Returns a view of the clause at the given index.
-    pub fn clause<'p>(&'p self, index: usize) -> ClauseView<'p> {
-        let start = index * self.num_vars;
-        let end = start + self.num_vars;
-
-        ClauseView {
-            pos: &self.arena_pos[start..end],
-            neg: &self.arena_neg[start..end],
-        }
-    }
-
-    /// Returns an iterator over all clauses in the problem.
-    pub fn clauses<'p>(&'p self) -> impl Iterator<Item = ClauseView<'p>> {
-        (0..self.num_clauses).map(move |i| self.clause(i))
-    }
 }
 
 type Assignment = Vec<Option<bool>>;
 
-#[derive(Debug, PartialEq)]
-enum ClauseStatus {
-    Satisfied,
-    Unresolved,
-    Unit(usize, bool), // (Variable Index, Boolean Value to satisfy)
-    Conflict,
+#[derive(Debug, Clone)]
+pub struct Clause {
+    /// A single bitset storing both positive and negative literals.
+    /// Indices 0..num_vars represent positive literals.
+    /// Indices num_vars..2*num_vars represent negative literals.
+    pub literals: FixedBitSet,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ClauseView<'a> {
-    pub pos: &'a BitSlice<usize, Lsb0>,
-    pub neg: &'a BitSlice<usize, Lsb0>,
+impl Clause {
+    pub fn new(size: usize) -> Self {
+        Self {
+            literals: FixedBitSet::with_capacity(size),
+        }
+    }
 }
 
-impl<'a> fmt::Display for ClauseView<'a> {
+impl fmt::Display for Clause {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // We infer num_vars from the bitset size (it's always constructed as 2 * num_vars)
+        let num_vars = self.literals.len() / 2;
         let mut first = true;
 
-        for i in self.pos.iter_ones() {
+        for i in self.literals.ones() {
             if !first {
                 write!(f, " ∨ ")?;
             }
-            write!(f, "{}", i + 1)?;
-            first = false;
-        }
 
-        for i in self.neg.iter_ones() {
-            if !first {
-                write!(f, " ∨ ")?;
+            if i < num_vars {
+                // Positive literal
+                write!(f, "{}", i + 1)?;
+            } else {
+                // Negative literal
+                write!(f, "¬{}", i + 1 - num_vars)?;
             }
-            write!(f, "¬{}", i + 1)?;
             first = false;
         }
 
         Ok(())
     }
+}
+
+#[derive(Debug, PartialEq)]
+enum ClauseStatus {
+    Satisfied,
+    Unresolved,
+    Unit(usize, bool),
+    Conflict,
 }
