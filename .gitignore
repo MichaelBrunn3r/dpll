@@ -9,5 +9,4 @@ devenv.local.nix
 # Added by cargo
 
 /target
-*.cnf
-*.gz
+/uf*

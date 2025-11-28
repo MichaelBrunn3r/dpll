@@ -1,28 +1,8 @@
-use fixedbitset::FixedBitSet;
+use crate::Problem;
 
-#[derive(Debug, Clone)]
-pub struct Problem {
-    pub num_vars: usize,
-    pub num_clauses: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct Clause {
-    pub pos: FixedBitSet,
-    pub neg: FixedBitSet,
-}
-
-impl Clause {
-    fn new(num_vars: usize) -> Self {
-        Clause {
-            pos: FixedBitSet::with_capacity(num_vars),
-            neg: FixedBitSet::with_capacity(num_vars),
-        }
-    }
-}
-
-/// Parse a DIMACS CNF formatted byte array into a Problem and its Clauses
-pub fn parse_dimacs(data: &[u8]) -> Result<(Problem, Vec<Clause>), String> {
+/// Parses DIMACS CNF format from a byte slice.
+/// Because Mmap implements Deref<[u8]>, this works with memory mapped files naturally.
+pub fn parse_dimacs(data: &[u8]) -> Result<Problem, String> {
     let mut iter = ByteArrayIterator::new(data);
 
     if !iter.skip_until(b'p') {
@@ -47,68 +27,58 @@ pub fn parse_dimacs(data: &[u8]) -> Result<(Problem, Vec<Clause>), String> {
         .parse_usize()
         .ok_or_else(|| "Expected number of clauses".to_string())?;
 
-    let problem = Problem {
-        num_vars: num_vars as usize,
-        num_clauses: num_clauses as usize,
-    };
+    // Allocate the Arena
+    let mut problem = Problem::new(num_vars, num_clauses);
 
     iter.skip_ascii_whitespace();
 
-    let mut clauses = Vec::<Clause>::with_capacity(problem.num_clauses);
-    while clauses.len() < problem.num_clauses {
-        let mut clause = Clause::new(problem.num_vars);
-
+    // Populate the Arena
+    for clause_idx in 0..num_clauses {
         loop {
             iter.skip_ascii_whitespace();
 
-            let is_negated = data[iter.position] == b'-';
-            if is_negated {
+            // Check for negation
+            let is_negated = if iter.peek() == Some(b'-') {
                 iter.position += 1;
-            }
+                true
+            } else {
+                false
+            };
 
             let literal = iter
                 .parse_usize()
                 .ok_or_else(|| "Expected literal in clause".to_string())?;
 
+            // 0 terminates the clause
             if literal == 0 {
                 break;
-            } else if is_negated {
-                clause.neg.insert(literal - 1);
+            }
+
+            // DIMACS variables are 1-indexed; convert to 0-indexed
+            let var_idx = literal - 1;
+
+            if var_idx >= num_vars {
+                return Err(format!(
+                    "Variable {} exceeds declared num_vars {}",
+                    literal, num_vars
+                ));
+            }
+
+            // Calculate exact bit position in the flat arena
+            let arena_index = (clause_idx * num_vars) + var_idx;
+
+            if is_negated {
+                problem.arena_neg.set(arena_index, true);
             } else {
-                clause.pos.insert(literal - 1);
+                problem.arena_pos.set(arena_index, true);
             }
         }
-        clauses.push(clause);
     }
 
-    Ok((problem, clauses))
+    Ok(problem)
 }
 
-impl std::fmt::Display for Clause {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut first = true;
-
-        for i in self.pos.ones() {
-            if !first {
-                write!(f, " ∨ ")?;
-            }
-            write!(f, "{}", i + 1)?;
-            first = false;
-        }
-
-        for i in self.neg.ones() {
-            if !first {
-                write!(f, " ∨ ")?;
-            }
-            write!(f, "¬{}", i + 1)?;
-            first = false;
-        }
-
-        Ok(())
-    }
-}
-
-/// A custom iterator over a byte array for parsing
+/// An iterator over a byte array with utility methods for parsing.
 struct ByteArrayIterator<'a> {
     data: &'a [u8],
     position: usize,
@@ -119,7 +89,14 @@ impl<'a> ByteArrayIterator<'a> {
         ByteArrayIterator { data, position: 0 }
     }
 
-    /// Skip bytes until (and including) the specified byte is found
+    fn peek(&self) -> Option<u8> {
+        if self.position < self.data.len() {
+            Some(self.data[self.position])
+        } else {
+            None
+        }
+    }
+
     fn skip_until(&mut self, byte: u8) -> bool {
         while self.position < self.data.len() {
             let current_byte = self.data[self.position];
@@ -131,28 +108,23 @@ impl<'a> ByteArrayIterator<'a> {
         false
     }
 
-    /// Skip ASCII whitespace characters
     fn skip_ascii_whitespace(&mut self) {
         while self.position < self.data.len() && self.data[self.position].is_ascii_whitespace() {
             self.position += 1;
         }
     }
 
-    /// Skip the expected byte sequence. Returns true if the sequence was found and skipped, false otherwise.
     fn skip_expected(&mut self, expected: &[u8]) -> bool {
         if self.position + expected.len() > self.data.len() {
             return false;
         }
-
         if &self.data[self.position..self.position + expected.len()] != expected {
             return false;
         }
-
         self.position += expected.len();
         true
     }
 
-    /// Parse an unsigned integer from the current position
     fn parse_usize(&mut self) -> Option<usize> {
         let mut num = 0usize;
         let start_pos = self.position;
