@@ -1,7 +1,7 @@
-use crate::{Clause, Problem};
+// Remove Clause from imports, as it's no longer a public struct we construct manually
+use crate::Problem;
 
 /// Parses DIMACS CNF format from a byte slice.
-/// Because Mmap implements Deref<[u8]>, this works with memory mapped files naturally.
 pub fn parse_dimacs(data: &[u8]) -> Result<Problem, String> {
     let mut iter = ByteArrayIterator::new(data);
 
@@ -27,17 +27,20 @@ pub fn parse_dimacs(data: &[u8]) -> Result<Problem, String> {
         .parse_usize()
         .ok_or_else(|| "Expected number of clauses".to_string())?;
 
-    // Create the Problem with a reserved vector for clauses
-    let mut problem = Problem::new(num_vars, num_clauses);
+    // CHANGE: Problem::new now only requires num_vars.
+    // The internal vectors grow as needed.
+    let mut problem = Problem::new(num_vars);
 
     iter.skip_ascii_whitespace();
 
+    // CHANGE: Reusable buffer to store literals for the current clause
+    // to avoid allocation on every loop iteration.
+    // Tuple is (variable_index, is_positive)
+    let mut clause_buffer: Vec<(usize, bool)> = Vec::with_capacity(8);
+
     // Populate the Clauses
     for _ in 0..num_clauses {
-        // Initialize a new clause with a single FixedBitSet large enough for both polarities.
-        // 0..num_vars = positive literals
-        // num_vars..2*num_vars = negative literals
-        let mut clause = Clause::new(num_vars * 2);
+        clause_buffer.clear();
 
         loop {
             iter.skip_ascii_whitespace();
@@ -69,23 +72,22 @@ pub fn parse_dimacs(data: &[u8]) -> Result<Problem, String> {
                 ));
             }
 
-            // Map literals to the single bitset:
-            // Positive x_i -> bit i
-            // Negative x_i -> bit i + num_vars
-            let bit_index = if is_negated {
-                var_idx + num_vars
-            } else {
-                var_idx
-            };
-
-            clause.literals.insert(bit_index);
+            // CHANGE: Instead of calculating bitset index, we push the tuple
+            // (variable, is_positive).
+            // if is_negated is true, is_positive is false.
+            clause_buffer.push((var_idx, !is_negated));
         }
 
-        problem.clauses.push(clause);
+        // CHANGE: Pass the slice to the problem to pack into the flat database
+        problem.add_clause(&clause_buffer);
     }
 
     Ok(problem)
 }
+
+// -------------------------------------------------------------
+// The Iterator logic below remains completely unchanged
+// -------------------------------------------------------------
 
 /// An iterator over a byte array with utility methods for parsing.
 struct ByteArrayIterator<'a> {

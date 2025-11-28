@@ -77,7 +77,8 @@ fn solve_file(path: &Path) -> Result<Option<Vec<bool>>, Box<dyn Error>> {
     let problem = parse_dimacs(&mmap)?;
     println!(
         "Problem: {} variables, {} clauses",
-        problem.num_vars, problem.num_clauses
+        problem.num_vars,
+        problem.clauses.len()
     );
     let res = problem.solve();
     match &res {
