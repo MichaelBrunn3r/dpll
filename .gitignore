@@ -1,0 +1,13 @@
+# Devenv
+.devenv*
+devenv.local.nix
+
+# direnv
+.direnv
+
+
+# Added by cargo
+
+/target
+*.cnf
+*.gz
