@@ -359,4 +359,39 @@ impl Problem {
         }
         true
     }
+
+    pub fn verify(&self, assignment: &[bool]) -> bool {
+        if assignment.len() != self.num_vars {
+            eprintln!("Verification failed: Assignment length mismatch.");
+            return false;
+        }
+
+        for (i, &(start, len)) in self.clauses.iter().enumerate() {
+            let mut clause_satisfied = false;
+            let end = start + len;
+
+            // Iterate over the literals in this specific clause
+            for idx in start..end {
+                let lit = self.clause_db[idx as usize];
+
+                // Get the boolean value assigned to this variable
+                let var_val = assignment[lit.var()];
+
+                // Check if the literal evaluates to true
+                // lit.is_pos() returns true for X, false for !X
+                // If is_pos matches the assignment (True==True or False==False), the literal is true.
+                if lit.is_pos() == var_val {
+                    clause_satisfied = true;
+                    break; // Optimization: One true literal satisfies the clause
+                }
+            }
+
+            if !clause_satisfied {
+                eprintln!("Verification failed: Clause {} is unsatisfied.", i);
+                return false;
+            }
+        }
+
+        true
+    }
 }

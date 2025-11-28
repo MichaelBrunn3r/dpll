@@ -18,6 +18,9 @@ struct Args {
     /// Limit number of files to solve when PATH is a directory
     #[arg(short = 'n', long = "number", value_name = "N")]
     n: Option<usize>,
+    /// Verify the solution
+    #[arg(long)]
+    verify: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -42,10 +45,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         for entry in entries {
             let start = Instant::now();
             println!("\n---\nProcessing file: {:?}\n---", &entry);
-            match solve_file(&entry) {
-                Ok(opt_solution) => {
+            match solve_file(&entry, args.verify) {
+                Ok((opt_solution, verification)) => {
                     let elapsed = start.elapsed();
-                    stats.record_success(opt_solution, elapsed);
+                    stats.record_success(opt_solution, verification, elapsed);
                     println!("Elapsed: {}", human_duration(elapsed));
                 }
                 Err(e) => {
@@ -59,7 +62,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else if path.is_file() {
         let start = Instant::now();
         println!("---\nProcessing file: {:?}\n---", &path);
-        solve_file(&path)?;
+        solve_file(&path, args.verify)?;
         let elapsed = start.elapsed();
         println!("Elapsed: {}", human_duration(elapsed));
     } else {
@@ -69,7 +72,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn solve_file(path: &Path) -> Result<Option<Vec<bool>>, Box<dyn Error>> {
+fn solve_file(
+    path: &Path,
+    verify: bool,
+) -> Result<(Option<Vec<bool>>, Option<bool>), Box<dyn Error>> {
     let file = File::open(path)?;
     // SAFETY: mapping a file is safe as long as the file isn't modified concurrently.
     let mmap = unsafe { Mmap::map(&file)? };
@@ -81,6 +87,7 @@ fn solve_file(path: &Path) -> Result<Option<Vec<bool>>, Box<dyn Error>> {
         problem.clauses.len()
     );
     let res = problem.solve();
+    let mut verification_status = None;
     match &res {
         Some(solution) => {
             print!("SAT! ");
@@ -92,11 +99,20 @@ fn solve_file(path: &Path) -> Result<Option<Vec<bool>>, Box<dyn Error>> {
                 }
             }
             println!();
+            if verify {
+                let verified = problem.verify(solution);
+                verification_status = Some(verified);
+                if verified {
+                    println!("Solution verified.");
+                } else {
+                    println!("Verification FAILED.");
+                }
+            }
         }
         None => println!("UNSAT"),
     }
 
-    Ok(res)
+    Ok((res, verification_status))
 }
 
 /// Aggregated statistics for a directory run.
@@ -106,6 +122,8 @@ struct Stats {
     sat_count: usize,
     unsat_count: usize,
     durations: Vec<Duration>,
+    verified_count: usize,
+    failed_verifications: usize,
 }
 
 impl Stats {
@@ -116,14 +134,28 @@ impl Stats {
             sat_count: 0,
             unsat_count: 0,
             durations: Vec::with_capacity(total_files),
+            verified_count: 0,
+            failed_verifications: 0,
         }
     }
 
-    fn record_success(&mut self, solution: Option<Vec<bool>>, dur: Duration) {
+    fn record_success(
+        &mut self,
+        solution: Option<Vec<bool>>,
+        verification: Option<bool>,
+        dur: Duration,
+    ) {
         self.processed += 1;
         self.durations.push(dur);
         if solution.is_some() {
             self.sat_count += 1;
+            if let Some(verified) = verification {
+                if verified {
+                    self.verified_count += 1;
+                } else {
+                    self.failed_verifications += 1;
+                }
+            }
         } else {
             self.unsat_count += 1;
         }
@@ -131,10 +163,25 @@ impl Stats {
 
     fn print_summary(&self) {
         println!("\n---\nSummary:");
-        println!(
-            "#Files  |   SAT   |  UNSAT  |   ERR\n{:<7} | {:^7} | {:^7} | {:^7}",
-            self.processed, self.sat_count, self.unsat_count, self.errors,
-        );
+
+        if self.verified_count > 0 || self.failed_verifications > 0 {
+            println!(
+                "#Files  | SAT/UNSAT/Verified | ERR\n{:<7} | {:^18} | {:^3}",
+                self.processed,
+                format!(
+                    "{}/{}/{}",
+                    self.sat_count, self.unsat_count, self.verified_count
+                ),
+                self.errors
+            );
+        } else {
+            println!(
+                "#Files  | SAT/UNSAT | ERR\n{:<7} | {:^9} | {:^3}",
+                self.processed,
+                format!("{}/{}", self.sat_count, self.unsat_count),
+                self.errors
+            );
+        }
 
         if !self.durations.is_empty() {
             let total_secs: f64 = self.durations.iter().map(|d| d.as_secs_f64()).sum();
