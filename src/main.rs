@@ -3,7 +3,6 @@ use dpll::parser::parse_dimacs;
 use dpll::utils::human_duration;
 use memmap2::Mmap;
 use std::time::{Duration, Instant};
-
 use std::{
     error::Error,
     fs,
@@ -16,6 +15,9 @@ use std::{
 struct Args {
     #[arg(value_name = "PATH")]
     path: PathBuf,
+    /// Limit number of files to solve when PATH is a directory
+    #[arg(short = 'n', long = "number", value_name = "N")]
+    n: Option<usize>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -24,13 +26,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let path = args.path;
 
     if path.is_dir() {
-        println!("Solving directory {:?}", &path);
         let mut entries: Vec<PathBuf> = fs::read_dir(&path)?
             .filter_map(Result::ok)
             .map(|e| e.path())
             .filter(|p| p.is_file())
             .collect();
         entries.sort();
+
+        if let Some(n) = args.n {
+            entries.truncate(n);
+        }
 
         let mut stats = Stats::new(entries.len());
 
@@ -50,7 +55,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        stats.print_summary(&path);
+        stats.print_summary();
     } else if path.is_file() {
         let start = Instant::now();
         println!("---\nProcessing file: {:?}\n---", &path);
@@ -95,7 +100,6 @@ fn solve_file(path: &Path) -> Result<Option<Vec<bool>>, Box<dyn Error>> {
 
 /// Aggregated statistics for a directory run.
 struct Stats {
-    total_files: usize,
     processed: usize,
     errors: usize,
     sat_count: usize,
@@ -106,7 +110,6 @@ struct Stats {
 impl Stats {
     fn new(total_files: usize) -> Self {
         Self {
-            total_files,
             processed: 0,
             errors: 0,
             sat_count: 0,
@@ -125,12 +128,12 @@ impl Stats {
         }
     }
 
-    fn print_summary(&self, path: &std::path::Path) {
-        println!("\nSummary for directory {:?}", path);
-        println!("  files found: {}", self.total_files);
-        println!("  processed: {}", self.processed);
-        println!("  errors: {}", self.errors);
-        println!("  SAT: {}, UNSAT: {}", self.sat_count, self.unsat_count);
+    fn print_summary(&self) {
+        println!("\n---\nSummary:");
+        println!(
+            "#Files  |   SAT   |  UNSAT  |   ERR\n{:<7} | {:^7} | {:^7} | {:^7}",
+            self.processed, self.sat_count, self.unsat_count, self.errors,
+        );
 
         if !self.durations.is_empty() {
             let total_secs: f64 = self.durations.iter().map(|d| d.as_secs_f64()).sum();
@@ -146,17 +149,14 @@ impl Stats {
                 (secs_vec[hi - 1] + secs_vec[hi]) / 2.0
             };
 
-            let total_dur = Duration::from_secs_f64(total_secs);
-            let avg_dur = Duration::from_secs_f64(avg_secs);
-            let min_dur = Duration::from_secs_f64(min);
-            let max_dur = Duration::from_secs_f64(max);
-            let median_dur = Duration::from_secs_f64(median);
-
-            println!("  total time: {}", human_duration(total_dur));
-            println!("  avg time:   {}", human_duration(avg_dur));
-            println!("  min time:   {}", human_duration(min_dur));
-            println!("  median:     {}", human_duration(median_dur));
-            println!("  max time:   {}", human_duration(max_dur));
+            println!(
+                "\ntotal   |   min   | median  |   avg   |  max   \n{:<7} | {:^7} | {:^7} | {:^7} | {:^7}",
+                human_duration(Duration::from_secs_f64(total_secs)),
+                human_duration(Duration::from_secs_f64(min)),
+                human_duration(Duration::from_secs_f64(median)),
+                human_duration(Duration::from_secs_f64(avg_secs)),
+                human_duration(Duration::from_secs_f64(max)),
+            );
         }
     }
 }

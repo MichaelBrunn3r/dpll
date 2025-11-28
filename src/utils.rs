@@ -1,21 +1,14 @@
-pub fn human_duration(d: std::time::Duration) -> String {
-    let secs = d.as_secs();
-    if secs >= 3600 {
-        let hours = secs / 3600;
-        let minutes = (secs % 3600) / 60;
-        let seconds = secs % 60;
-        let millis = d.subsec_millis();
-        format!("{}h {:02}m {:02}.{:03}s", hours, minutes, seconds, millis)
-    } else if secs >= 60 {
-        let minutes = secs / 60;
-        let seconds = secs % 60;
-        let millis = d.subsec_millis();
-        format!("{}m {:02}.{:03}s", minutes, seconds, millis)
-    } else if secs >= 1 {
-        format!("{:.3} s", d.as_secs_f64())
-    } else if d.as_millis() >= 1 {
-        format!("{} ms", d.as_millis())
+use std::time::Duration;
+
+pub fn human_duration(duration: Duration) -> String {
+    let total_secs = duration.as_secs_f64();
+    if total_secs < 0.000_001 {
+        format!("{:.1}ns", total_secs * 1_000_000_000.0)
+    } else if total_secs < 0.001 {
+        format!("{:.1}µs", total_secs * 1_000_000.0)
+    } else if total_secs < 1.0 {
+        format!("{:.1}ms", total_secs * 1000.0)
     } else {
-        format!("{} µs", d.as_micros())
+        format!("{:.1}s", total_secs)
     }
 }
