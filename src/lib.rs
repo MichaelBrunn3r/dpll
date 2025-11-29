@@ -54,11 +54,11 @@ impl Problem {
 
     pub fn solve(&self) -> Option<Vec<bool>> {
         // Flat vector is faster than Vec<Option<bool>>
-        let assignment = vec![LBool::UNDEF; self.num_vars];
+        let assignment = vec![None; self.num_vars];
         self.dpll(assignment)
     }
 
-    fn dpll(&self, mut assignment: Vec<LBool>) -> Option<Vec<bool>> {
+    fn dpll(&self, mut assignment: Vec<Option<bool>>) -> Option<Vec<bool>> {
         let mut trail: Vec<Lit> = Vec::with_capacity(self.num_vars);
 
         // Stack stores: (decision_lit, tried_both_branches_flag, trail_len_before_decision)
@@ -73,9 +73,7 @@ impl Problem {
             // We pass the queue to avoid reallocation, but we must populate it first
             // if we just made a decision.
             if !trail.is_empty() {
-                // Optimization: Only propagate the implications of the most recent assignments.
-                // In a basic DPLL, we often just scan everything or use the queue.
-                // Here, we'll use a queue-based approach.
+                // ...existing code...
             }
 
             let conflict = self.propagate(&mut assignment, &mut trail, &mut prop_queue);
@@ -90,7 +88,7 @@ impl Problem {
                     // Undo trail
                     while trail.len() > old_trail_len {
                         let l = trail.pop().unwrap();
-                        assignment[l.var_index()] = LBool::UNDEF;
+                        assignment[l.var_index()] = None;
                     }
 
                     if !tried_negated {
@@ -99,9 +97,9 @@ impl Problem {
 
                         // Set value
                         assignment[negated.var_index()] = if negated.is_pos() {
-                            LBool::TRUE
+                            Some(true)
                         } else {
-                            LBool::FALSE
+                            Some(false)
                         };
                         trail.push(negated);
 
@@ -124,7 +122,7 @@ impl Problem {
                 // Pick first undefined variable
                 let mut pick = None;
                 for v in 0..self.num_vars {
-                    if assignment[v] == LBool::UNDEF {
+                    if assignment[v].is_none() {
                         pick = Some(v);
                         break;
                     }
@@ -133,14 +131,14 @@ impl Problem {
                 match pick {
                     None => {
                         // All assigned, no conflict -> SAT
-                        return Some(assignment.iter().map(|&x| x == LBool::TRUE).collect());
+                        return Some(assignment.iter().map(|&x| x == Some(true)).collect());
                     }
                     Some(var) => {
                         // Branching: heuristic (try TRUE first)
                         let lit = Lit::new(var, true);
                         let trail_len = trail.len();
 
-                        assignment[var] = LBool::TRUE;
+                        assignment[var] = Some(true);
                         trail.push(lit);
                         stack.push((lit, false, trail_len));
 
@@ -155,7 +153,7 @@ impl Problem {
     // Returns true if conflict found
     fn propagate(
         &self,
-        assignment: &mut Vec<LBool>,
+        assignment: &mut Vec<Option<bool>>,
         trail: &mut Vec<Lit>,
         queue: &mut Vec<Lit>, // queue contains literals newly satisfied (assigned true)
     ) -> bool {
@@ -177,11 +175,12 @@ impl Problem {
         if queue.is_empty() && trail.is_empty() {
             // Scan all clauses once to find initial units
             for clause_idx in 0..self.clause_spans.len() {
-                if let Some(l) = self.clause_at(clause_idx).find_unit_literal(assignment) {
+                let clause = self.clause_at(clause_idx);
+                if let Some(l) = clause.find_unit_literal(assignment.as_slice()) {
                     if self.apply_lit(l, assignment, trail, queue) {
                         return true;
                     }
-                } else if self.clause_at(clause_idx).conflicts_with(assignment) {
+                } else if clause.conflicts_with(assignment.as_slice()) {
                     return true;
                 }
             }
@@ -199,12 +198,13 @@ impl Problem {
             let falsified_lit = just_assigned_true.negated();
 
             for &clause_idx in &self.lit_occurrences[falsified_lit.0 as usize] {
-                if let Some(unit_lit) = self.clause_at(clause_idx).find_unit_literal(assignment) {
+                let clause = self.clause_at(clause_idx);
+                if let Some(unit_lit) = clause.find_unit_literal(assignment.as_slice()) {
                     // Found a unit!
                     if self.apply_lit(unit_lit, assignment, trail, queue) {
                         return true; // Conflict
                     }
-                } else if self.clause_at(clause_idx).conflicts_with(assignment) {
+                } else if clause.conflicts_with(assignment.as_slice()) {
                     return true;
                 }
             }
@@ -218,18 +218,18 @@ impl Problem {
     fn apply_lit(
         &self,
         lit: Lit,
-        assignment: &mut Vec<LBool>,
+        assignment: &mut Vec<Option<bool>>,
         trail: &mut Vec<Lit>,
         queue: &mut Vec<Lit>,
     ) -> bool {
         let val = if lit.is_pos() {
-            LBool::TRUE
+            Some(true)
         } else {
-            LBool::FALSE
+            Some(false)
         };
         let current = assignment[lit.var_index()];
 
-        if current == LBool::UNDEF {
+        if current.is_none() {
             assignment[lit.var_index()] = val;
             trail.push(lit);
             queue.push(lit);
@@ -272,14 +272,6 @@ impl Problem {
             ClauseView::from(&self.clause_literals[span.start as usize..span.end()])
         })
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum LBool {
-    UNDEF = 0,
-    TRUE = 1,
-    FALSE = 2,
 }
 
 /// Identifier for a clause that is unique within a Problem.

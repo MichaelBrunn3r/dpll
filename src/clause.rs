@@ -1,5 +1,3 @@
-use crate::LBool;
-
 /// A view of a clauses literals.
 pub struct ClauseView<'a>(&'a [Lit]);
 
@@ -15,19 +13,18 @@ impl ClauseView<'_> {
         false
     }
 
-    /// Checks if the clause conflicts with the given assignment.
+    /// Checks if the clause conflicts with the given partial assignment.
     /// A conflict occurs if all literals in the clause evaluate to false.
-    pub fn conflicts_with(&self, assignment: &[LBool]) -> bool {
-        // Conflict if ALL literals evaluate to false
+    pub fn conflicts_with(&self, assignment: &[Option<bool>]) -> bool {
         for &lit in self.0 {
             match assignment[lit.var_index()] {
-                LBool::UNDEF => return false, // Not a conflict yet
-                LBool::TRUE => {
+                None => return false, // Not a conflict yet
+                Some(true) => {
                     if lit.is_pos() {
                         return false;
                     }
                 }
-                LBool::FALSE => {
+                Some(false) => {
                     if !lit.is_pos() {
                         return false;
                     }
@@ -37,25 +34,25 @@ impl ClauseView<'_> {
         true
     }
 
-    /// For a given assignment, finds a unit literal in the clause if it exists.
-    pub fn find_unit_literal(&self, assignment: &[LBool]) -> Option<Lit> {
+    /// For a given partial assignment, finds a unit literal in the clause if it exists.
+    pub fn find_unit_literal(&self, assignment: &[Option<bool>]) -> Option<Lit> {
         let mut unassigned_lit = None;
         let mut unassigned_count = 0;
 
         for &lit in self.0 {
             let is_pos = lit.is_pos();
             match assignment[lit.var_index()] {
-                LBool::TRUE => {
+                Some(true) => {
                     if is_pos {
                         return None;
                     }
                 } // Clause Satisfied
-                LBool::FALSE => {
+                Some(false) => {
                     if !is_pos {
                         return None;
                     }
                 } // Clause Satisfied
-                LBool::UNDEF => {
+                None => {
                     unassigned_count += 1;
                     unassigned_lit = Some(lit);
                 }
@@ -69,7 +66,7 @@ impl ClauseView<'_> {
         }
     }
 
-    /// Checks if the clause is satisfied by the given boolean assignment.
+    /// Checks if the clause is satisfied by the given complete assignment.
     pub fn satisfied_by(&self, assignment: &[bool]) -> bool {
         for &lit in self.0 {
             let is_pos = lit.is_pos();
