@@ -6,7 +6,7 @@ impl ClauseView<'_> {
     /// Assumes the clause is sorted and contains unique literals.
     pub fn is_tautology(&self) -> bool {
         for i in 0..self.0.len().saturating_sub(1) {
-            if self.0[i].var_index() == self.0[i + 1].var_index() {
+            if self.0[i].var_id() == self.0[i + 1].var_id() {
                 return true;
             }
         }
@@ -17,7 +17,7 @@ impl ClauseView<'_> {
     /// A conflict occurs if all literals in the clause evaluate to false.
     pub fn conflicts_with(&self, assignment: &[Option<bool>]) -> bool {
         for &lit in self.0 {
-            match assignment[lit.var_index()] {
+            match assignment[lit.var_id()] {
                 None => return false, // Not a conflict yet
                 Some(true) => {
                     if lit.is_pos() {
@@ -25,7 +25,7 @@ impl ClauseView<'_> {
                     }
                 }
                 Some(false) => {
-                    if !lit.is_pos() {
+                    if lit.is_neg() {
                         return false;
                     }
                 }
@@ -41,7 +41,7 @@ impl ClauseView<'_> {
 
         for &lit in self.0 {
             let is_pos = lit.is_pos();
-            match assignment[lit.var_index()] {
+            match assignment[lit.var_id()] {
                 Some(true) => {
                     if is_pos {
                         return None;
@@ -66,12 +66,10 @@ impl ClauseView<'_> {
         }
     }
 
-    /// Checks if the clause is satisfied by the given complete assignment.
+    /// Checks if the clause is satisfied by the given assignment.
     pub fn satisfied_by(&self, assignment: &[bool]) -> bool {
         for &lit in self.0 {
-            let is_pos = lit.is_pos();
-            let var_value = assignment[lit.var_index()];
-            if (is_pos && var_value) || (!is_pos && !var_value) {
+            if lit.eval_with(assignment[lit.var_id()]) {
                 return true;
             }
         }
@@ -104,9 +102,9 @@ impl<'a> IntoIterator for ClauseView<'a> {
 // Literal
 // --------------------------------
 
-// Represents a literal as an integer.
-// Even numbers are positive literals (v), Odd numbers are negative (!v).
-// Var 0 -> Lit 0 (pos), Lit 1 (neg)
+/// A propositional logic literal, i.e. a variable or its negation.
+///
+/// E.g. `x` or `¬x`, where `x` is a variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Lit(pub u32);
 
@@ -116,19 +114,31 @@ impl Lit {
         Lit((var as u32) << 1 | (!is_pos as u32))
     }
 
-    /// Returns the variable index (0-based).
-    pub fn var_index(&self) -> usize {
+    /// Returns the variable ID (0-based) of the literal.
+    pub fn var_id(&self) -> usize {
         (self.0 >> 1) as usize
     }
 
-    /// Returns true if the literal is positive.
+    /// Returns true if the variable is not negated.
     pub fn is_pos(&self) -> bool {
         (self.0 & 1) == 0
     }
 
-    /// Returns the negation of the literal.
+    /// Returns true if the variable is negated.
+    pub fn is_neg(&self) -> bool {
+        (self.0 & 1) == 1
+    }
+
+    /// Returns the negated version of this literal.
     pub fn negated(&self) -> Self {
         Lit(self.0 ^ 1)
+    }
+
+    /// Evaluates the literal given a boolean value for its variable.
+    ///
+    /// E.g. assigning the variable `x=true` makes the literal `x` evaluate to `true` and `¬x` evaluate to `false`.
+    pub fn eval_with(&self, value: bool) -> bool {
+        self.is_neg() ^ value
     }
 }
 
@@ -143,9 +153,9 @@ impl From<i32> for Lit {
 impl std::fmt::Display for Lit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.is_pos() {
-            write!(f, "{}", self.var_index() + 1)
+            write!(f, "{}", self.var_id() + 1)
         } else {
-            write!(f, "¬{}", self.var_index() + 1)
+            write!(f, "¬{}", self.var_id() + 1)
         }
     }
 }

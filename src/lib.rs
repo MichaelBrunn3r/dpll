@@ -34,15 +34,17 @@ impl Problem {
         lits.sort_unstable();
         lits.dedup();
 
+        // Ignore tautological clauses
         if ClauseView::from(lits.as_slice()).is_tautology() {
-            return; // Ignore tautological clauses
+            return;
         }
 
         let start = self.clause_literals.len() as u32;
         let len = lits.len() as u32;
         let clause_idx = self.clause_spans.len();
 
-        for &lit in lits.iter() {
+        // Add literals to the flat vector and update occurrences
+        for lit in lits.drain(0..) {
             self.clause_literals.push(lit);
 
             // Add this clause to the occurrence list of the literal
@@ -73,7 +75,14 @@ impl Problem {
             // We pass the queue to avoid reallocation, but we must populate it first
             // if we just made a decision.
             if !trail.is_empty() {
-                // ...existing code...
+                // FIX: Ensure the latest assignment is in the queue for propagation.
+                // Depending on where the push happens in your loop, the queue might be empty
+                // here even though we just added to the trail.
+                if prop_queue.is_empty() {
+                    if let Some(&last_lit) = trail.last() {
+                        prop_queue.push(last_lit);
+                    }
+                }
             }
 
             let conflict = self.propagate(&mut assignment, &mut trail, &mut prop_queue);
@@ -88,7 +97,7 @@ impl Problem {
                     // Undo trail
                     while trail.len() > old_trail_len {
                         let l = trail.pop().unwrap();
-                        assignment[l.var_index()] = None;
+                        assignment[l.var_id()] = None;
                     }
 
                     if !tried_negated {
@@ -96,7 +105,7 @@ impl Problem {
                         let negated = lit.negated();
 
                         // Set value
-                        assignment[negated.var_index()] = if negated.is_pos() {
+                        assignment[negated.var_id()] = if negated.is_pos() {
                             Some(true)
                         } else {
                             Some(false)
@@ -184,7 +193,10 @@ impl Problem {
                     return true;
                 }
             }
-            return false;
+
+            if queue.is_empty() {
+                return false;
+            }
         }
 
         let mut ptr = 0;
@@ -227,10 +239,10 @@ impl Problem {
         } else {
             Some(false)
         };
-        let current = assignment[lit.var_index()];
+        let current = assignment[lit.var_id()];
 
         if current.is_none() {
-            assignment[lit.var_index()] = val;
+            assignment[lit.var_id()] = val;
             trail.push(lit);
             queue.push(lit);
             false
