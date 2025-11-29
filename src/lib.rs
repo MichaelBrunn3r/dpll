@@ -44,9 +44,18 @@ impl Problem {
     }
 
     fn dpll(&self, initial_assignment: Vec<Option<bool>>) -> Option<Vec<bool>> {
-        let mut stack = vec![initial_assignment];
+        let mut assignment = initial_assignment;
+        let mut decision_level = 0;
 
-        'backtrack: while let Some(mut assignment) = stack.pop() {
+        // History of variable assignments for backtracking
+        let mut assign_history = Vec::<VariableAssignment>::new();
+
+        // History of decision levels for backtracking. Stores indices into the 'assign_history'
+        // where each decision level starts. Required, because in each decision level, multiple
+        // forced variable assignments (unit propagations) may occur.
+        let mut decision_history = vec![0usize];
+
+        'backtrack: loop {
             // --- Phase 1: Unit propagation ---
             // Repeat until no unit clauses or conflicts are found
             'unit_prop: loop {
@@ -55,7 +64,6 @@ impl Problem {
 
                 'find_unit: for clause in &self.clauses {
                     match clause.eval_with(&assignment) {
-                        ClauseState::Unsatisfied => continue 'backtrack, // conflict => backtrack
                         ClauseState::Satisfied => continue 'find_unit, // 1 clause satisfied => check next
                         ClauseState::Undecided(_) => {
                             all_clauses_satisfied = false;
@@ -67,23 +75,34 @@ impl Problem {
                             unit_lit = Some(unit_literal);
                             break 'find_unit;
                         }
+                        ClauseState::Unsatisfied => {
+                            if !self.backtrack(
+                                &mut assignment,
+                                &mut decision_level,
+                                &mut assign_history,
+                                &mut decision_history,
+                            ) {
+                                return None; // Unsatisfiable => return UNSAT
+                            }
+                            continue 'backtrack; // Backtracked => restart search
+                        }
                     }
                 }
 
                 if all_clauses_satisfied {
-                    // All clauses satisfied => return the solution
-                    return Some(
-                        assignment
-                            .into_iter()
-                            .map(|val| val.unwrap_or(false))
-                            .collect(),
-                    );
+                    return Some(solution_from_assignment(&assignment)); // All clauses satisfied => return the solution
                 }
 
                 if let Some(lit) = unit_lit {
                     // Assign the unit literal to the value that satisfies the unit clause
+
+                    assign_history.push(VariableAssignment {
+                        var_id: lit.var_id(),
+                        old_value: assignment[lit.var_id()],
+                    });
                     assignment[lit.var_id()] = Some(lit.is_pos());
-                    continue 'unit_prop; // Continue unit propagation until no unit clauses remain
+
+                    continue 'unit_prop;
                 } else {
                     break 'unit_prop; // No unit clause or conflict => proceed to branching
                 }
@@ -91,28 +110,109 @@ impl Problem {
 
             // --- Phase 2: Splitting / Branching ---
 
-            let decision_var_idx = if let Some(idx) =
-                assignment.iter().position(|val| val.is_none())
+            // Find first unassigned variable
+            let decision_var_id = if let Some(var_id) = assignment
+                .iter()
+                .enumerate()
+                .find(|(_, val)| val.is_none())
+                .map(|(id, _)| id)
             {
-                idx
+                var_id
             } else {
-                eprint!(
-                    "Error: All variables assigned but not all clauses satisfied. This should be caught in the undecided check above."
-                );
-                continue 'backtrack; // Don't panic, just backtrack
+                return Some(solution_from_assignment(&assignment)); // All variables assigned => return the solution
             };
 
-            // Branch 1: Assign decision variable to false
-            let mut assignment_false = assignment.clone();
-            assignment_false[decision_var_idx] = Some(false);
-            stack.push(assignment_false);
+            decision_level += 1;
+            decision_history.push(assign_history.len());
 
-            // Branch 2: Assign decision variable to true
-            assignment[decision_var_idx] = Some(true);
-            stack.push(assignment);
+            assign_history.push(VariableAssignment {
+                var_id: decision_var_id,
+                old_value: assignment[decision_var_id],
+            });
+            assignment[decision_var_id] = Some(true); // First try assigning 'true'
+        }
+    }
+
+    fn backtrack(
+        &self,
+        assignment: &mut Vec<Option<bool>>,
+        decision_level: &mut usize,
+        assign_history: &mut Vec<VariableAssignment>,
+        decision_history: &mut Vec<usize>,
+    ) -> bool {
+        if *decision_level == 0 {
+            // Cannot backtrack further. Formula is unsatisfiable (UNSAT).
+            return false;
         }
 
-        None
+        self.reset_current_decision_level(
+            assignment,
+            *decision_level,
+            assign_history,
+            decision_history,
+        );
+        *decision_level -= 1;
+
+        loop {
+            if self.try_flip_previous_decision(assignment, assign_history) {
+                return true;
+            }
+            // Flip failed, backtrack further
+
+            if *decision_level == 0 {
+                return false; // Cannot backtrack further => UNSAT
+            }
+
+            // Backtrack one more level
+            self.reset_current_decision_level(
+                assignment,
+                *decision_level,
+                assign_history,
+                decision_history,
+            );
+            *decision_level -= 1;
+        }
+    }
+
+    fn reset_current_decision_level(
+        &self,
+        assignment: &mut Vec<Option<bool>>,
+        decision_level: usize,
+        assign_history: &mut Vec<VariableAssignment>,
+        decision_history: &mut Vec<usize>,
+    ) {
+        let start_of_current_level = decision_history[decision_level];
+
+        // Revert all assignments made in the current decision level
+        while assign_history.len() > start_of_current_level {
+            if let Some(assignment_to_revert) = assign_history.pop() {
+                assignment[assignment_to_revert.var_id] = assignment_to_revert.old_value;
+            }
+        }
+
+        decision_history.pop();
+    }
+
+    fn try_flip_previous_decision(
+        &self,
+        assignment: &mut Vec<Option<bool>>,
+        assign_history: &mut Vec<VariableAssignment>,
+    ) -> bool {
+        // Attempt to flip the previous decision variable.
+        // Decision order: true -> false -> backtrack further
+        if let Some(prev_decision) = assign_history.last_mut() {
+            if assignment[prev_decision.var_id] == Some(false) {
+                // Decision was already 'false'. Revert and backtrack further.
+                assignment[prev_decision.var_id] = prev_decision.old_value;
+                assign_history.pop();
+                return false; // Flip failed
+            } else {
+                // Already tried 'true'. Now try 'false'.
+                assignment[prev_decision.var_id] = Some(false);
+                return true; // Flip successful
+            }
+        }
+        false // No previous decision to flip
     }
 
     /// Verifies if the given assignment satisfies all clauses in the problem.
@@ -135,3 +235,15 @@ impl Problem {
 
 /// Identifier for a clause that is unique within a Problem.
 type ClauseID = usize;
+
+#[derive(Debug)]
+struct VariableAssignment {
+    /// The ID of the variable that was assigned a value.
+    var_id: usize,
+    /// The previous value of the variable before assignment.
+    old_value: Option<bool>,
+}
+
+fn solution_from_assignment(assignment: &[Option<bool>]) -> Vec<bool> {
+    assignment.iter().map(|&val| val.unwrap_or(false)).collect()
+}
