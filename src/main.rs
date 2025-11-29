@@ -1,4 +1,5 @@
 use clap::Parser;
+use dpll::DPLLSolver;
 use dpll::parser::parse_dimacs_cnf;
 use dpll::utils::human_duration;
 use memmap2::Mmap;
@@ -84,7 +85,7 @@ fn solve_file(path: &Path, verify: bool, stats: &mut Stats) -> Result<(), Box<dy
     );
 
     let solve_start = Instant::now();
-    match &problem.solve() {
+    match DPLLSolver::new(&problem).solve() {
         Some(solution) => {
             stats.sat_count += 1;
             let solve_elapsed = solve_start.elapsed();
@@ -102,7 +103,7 @@ fn solve_file(path: &Path, verify: bool, stats: &mut Stats) -> Result<(), Box<dy
             }
 
             if verify {
-                match problem.verify_solution(solution) {
+                match problem.verify_solution(&solution) {
                     Ok(()) => {
                         print!("OK");
                         stats.verified_count += 1;

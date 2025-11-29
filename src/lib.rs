@@ -38,183 +38,6 @@ impl Problem {
         self.clauses.push(clause.clone());
     }
 
-    pub fn solve(&self) -> Option<Vec<bool>> {
-        let assignment = vec![None; self.num_vars];
-        self.dpll(assignment)
-    }
-
-    fn dpll(&self, initial_assignment: Vec<Option<bool>>) -> Option<Vec<bool>> {
-        let mut assignment = initial_assignment;
-        let mut decision_level = 0;
-
-        // History of variable assignments for backtracking
-        let mut assign_history = Vec::<VariableAssignment>::new();
-
-        // History of decision levels for backtracking. Stores indices into the 'assign_history'
-        // where each decision level starts. Required, because in each decision level, multiple
-        // forced variable assignments (unit propagations) may occur.
-        let mut decision_history = vec![0usize];
-
-        'backtrack: loop {
-            // --- Phase 1: Unit propagation ---
-            // Repeat until no unit clauses or conflicts are found
-            'unit_prop: loop {
-                let mut all_clauses_satisfied = true;
-                let mut unit_lit: Option<Lit> = None;
-
-                'find_unit: for clause in &self.clauses {
-                    match clause.eval_with(&assignment) {
-                        ClauseState::Satisfied => continue 'find_unit, // 1 clause satisfied => check next
-                        ClauseState::Undecided(_) => {
-                            all_clauses_satisfied = false;
-                            continue 'find_unit; // continue checking for conflicts and unit clauses
-                        }
-                        ClauseState::Unit(unit_literal) => {
-                            // Found a unit clause => forced to assign the unit literal
-                            all_clauses_satisfied = false;
-                            unit_lit = Some(unit_literal);
-                            break 'find_unit;
-                        }
-                        ClauseState::Unsatisfied => {
-                            if !self.backtrack(
-                                &mut assignment,
-                                &mut decision_level,
-                                &mut assign_history,
-                                &mut decision_history,
-                            ) {
-                                return None; // Unsatisfiable => return UNSAT
-                            }
-                            continue 'backtrack; // Backtracked => restart search
-                        }
-                    }
-                }
-
-                if all_clauses_satisfied {
-                    return Some(solution_from_assignment(&assignment)); // All clauses satisfied => return the solution
-                }
-
-                if let Some(lit) = unit_lit {
-                    // Assign the unit literal to the value that satisfies the unit clause
-
-                    assign_history.push(VariableAssignment {
-                        var_id: lit.var_id(),
-                        old_value: assignment[lit.var_id()],
-                    });
-                    assignment[lit.var_id()] = Some(lit.is_pos());
-
-                    continue 'unit_prop;
-                } else {
-                    break 'unit_prop; // No unit clause or conflict => proceed to branching
-                }
-            }
-
-            // --- Phase 2: Splitting / Branching ---
-
-            // Find first unassigned variable
-            let decision_var_id = if let Some(var_id) = assignment
-                .iter()
-                .enumerate()
-                .find(|(_, val)| val.is_none())
-                .map(|(id, _)| id)
-            {
-                var_id
-            } else {
-                return Some(solution_from_assignment(&assignment)); // All variables assigned => return the solution
-            };
-
-            decision_level += 1;
-            decision_history.push(assign_history.len());
-
-            assign_history.push(VariableAssignment {
-                var_id: decision_var_id,
-                old_value: assignment[decision_var_id],
-            });
-            assignment[decision_var_id] = Some(true); // First try assigning 'true'
-        }
-    }
-
-    fn backtrack(
-        &self,
-        assignment: &mut Vec<Option<bool>>,
-        decision_level: &mut usize,
-        assign_history: &mut Vec<VariableAssignment>,
-        decision_history: &mut Vec<usize>,
-    ) -> bool {
-        if *decision_level == 0 {
-            // Cannot backtrack further. Formula is unsatisfiable (UNSAT).
-            return false;
-        }
-
-        self.reset_current_decision_level(
-            assignment,
-            *decision_level,
-            assign_history,
-            decision_history,
-        );
-        *decision_level -= 1;
-
-        loop {
-            if self.try_flip_previous_decision(assignment, assign_history) {
-                return true;
-            }
-            // Flip failed, backtrack further
-
-            if *decision_level == 0 {
-                return false; // Cannot backtrack further => UNSAT
-            }
-
-            // Backtrack one more level
-            self.reset_current_decision_level(
-                assignment,
-                *decision_level,
-                assign_history,
-                decision_history,
-            );
-            *decision_level -= 1;
-        }
-    }
-
-    fn reset_current_decision_level(
-        &self,
-        assignment: &mut Vec<Option<bool>>,
-        decision_level: usize,
-        assign_history: &mut Vec<VariableAssignment>,
-        decision_history: &mut Vec<usize>,
-    ) {
-        let start_of_current_level = decision_history[decision_level];
-
-        // Revert all assignments made in the current decision level
-        while assign_history.len() > start_of_current_level {
-            if let Some(assignment_to_revert) = assign_history.pop() {
-                assignment[assignment_to_revert.var_id] = assignment_to_revert.old_value;
-            }
-        }
-
-        decision_history.pop();
-    }
-
-    fn try_flip_previous_decision(
-        &self,
-        assignment: &mut Vec<Option<bool>>,
-        assign_history: &mut Vec<VariableAssignment>,
-    ) -> bool {
-        // Attempt to flip the previous decision variable.
-        // Decision order: true -> false -> backtrack further
-        if let Some(prev_decision) = assign_history.last_mut() {
-            if assignment[prev_decision.var_id] == Some(false) {
-                // Decision was already 'false'. Revert and backtrack further.
-                assignment[prev_decision.var_id] = prev_decision.old_value;
-                assign_history.pop();
-                return false; // Flip failed
-            } else {
-                // Already tried 'true'. Now try 'false'.
-                assignment[prev_decision.var_id] = Some(false);
-                return true; // Flip successful
-            }
-        }
-        false // No previous decision to flip
-    }
-
     /// Verifies if the given assignment satisfies all clauses in the problem.
     pub fn verify_solution(&self, solution: &[bool]) -> Result<(), String> {
         debug_assert_eq!(
@@ -230,6 +53,162 @@ impl Problem {
         }
 
         Ok(())
+    }
+}
+
+pub struct DPLLSolver<'p> {
+    problem: &'p Problem,
+    assignment: Vec<Option<bool>>,
+    /// History of variable assignments for backtracking
+    assign_history: Vec<VariableAssignment>,
+    // History of decision levels for backtracking. Stores indices into the 'assign_history'
+    // where each decision level starts. Required, because in each decision level, multiple
+    // forced variable assignments (unit propagations) may occur.
+    decision_history: Vec<usize>,
+    decision_level: usize,
+}
+
+impl<'p> DPLLSolver<'p> {
+    pub fn new(problem: &'p Problem) -> Self {
+        let num_vars = problem.num_vars;
+        DPLLSolver {
+            problem,
+            assignment: vec![None; num_vars],
+            decision_history: vec![0],
+            assign_history: Vec::new(),
+            decision_level: 0,
+        }
+    }
+
+    pub fn solve(&mut self) -> Option<Vec<bool>> {
+        'backtrack: loop {
+            // --- Phase 1: Unit propagation ---
+            // Repeat until no unit clauses or conflicts are found
+            'unit_prop: loop {
+                let mut all_clauses_satisfied = true;
+                let mut unit_lit: Option<Lit> = None;
+
+                'find_unit: for clause in &self.problem.clauses {
+                    match clause.eval_with(&self.assignment) {
+                        ClauseState::Satisfied => continue 'find_unit, // 1 clause satisfied => check next
+                        ClauseState::Undecided(_) => {
+                            all_clauses_satisfied = false;
+                            continue 'find_unit; // continue checking for conflicts and unit clauses
+                        }
+                        ClauseState::Unit(unit_literal) => {
+                            // Found a unit clause => forced to assign the unit literal
+                            all_clauses_satisfied = false;
+                            unit_lit = Some(unit_literal);
+                            break 'find_unit;
+                        }
+                        ClauseState::Unsatisfied => {
+                            if !self.backtrack() {
+                                return None; // Unsatisfiable => return UNSAT
+                            }
+                            continue 'backtrack; // Backtracked => restart search
+                        }
+                    }
+                }
+
+                if all_clauses_satisfied {
+                    return Some(solution_from_assignment(&self.assignment)); // All clauses satisfied => return the solution
+                }
+
+                if let Some(lit) = unit_lit {
+                    // Assign the unit literal to the value that satisfies the unit clause
+
+                    self.assign_history.push(VariableAssignment {
+                        var_id: lit.var_id(),
+                        old_value: self.assignment[lit.var_id()],
+                    });
+                    self.assignment[lit.var_id()] = Some(lit.is_pos());
+
+                    continue 'unit_prop;
+                } else {
+                    break 'unit_prop; // No unit clause or conflict => proceed to branching
+                }
+            }
+
+            // --- Phase 2: Splitting / Branching ---
+
+            // Find first unassigned variable
+            let decision_var_id = if let Some(var_id) = self
+                .assignment
+                .iter()
+                .enumerate()
+                .find(|(_, val)| val.is_none())
+                .map(|(id, _)| id)
+            {
+                var_id
+            } else {
+                return Some(solution_from_assignment(&self.assignment)); // All variables assigned => return the solution
+            };
+
+            self.decision_level += 1;
+            self.decision_history.push(self.assign_history.len());
+
+            self.assign_history.push(VariableAssignment {
+                var_id: decision_var_id,
+                old_value: self.assignment[decision_var_id],
+            });
+            self.assignment[decision_var_id] = Some(true); // First try assigning 'true'
+        }
+    }
+
+    fn backtrack(&mut self) -> bool {
+        if self.decision_level == 0 {
+            // Cannot backtrack further => UNSAT
+            return false;
+        }
+
+        self.reset_current_decision_level(self.decision_level);
+        self.decision_level -= 1;
+
+        loop {
+            if self.try_flip_previous_decision() {
+                return true;
+            }
+            // Flip failed, backtrack further
+
+            if self.decision_level == 0 {
+                return false; // Cannot backtrack further => UNSAT
+            }
+
+            // Backtrack one more level
+            self.reset_current_decision_level(self.decision_level);
+            self.decision_level -= 1;
+        }
+    }
+
+    fn reset_current_decision_level(&mut self, decision_level: usize) {
+        let start_of_current_level = self.decision_history[decision_level];
+
+        // Revert all assignments made in the current decision level
+        while self.assign_history.len() > start_of_current_level {
+            if let Some(assignment_to_revert) = self.assign_history.pop() {
+                self.assignment[assignment_to_revert.var_id] = assignment_to_revert.old_value;
+            }
+        }
+
+        self.decision_history.pop();
+    }
+
+    fn try_flip_previous_decision(&mut self) -> bool {
+        // Attempt to flip the previous decision variable.
+        // Decision order: true -> false -> backtrack further
+        if let Some(prev_decision) = self.assign_history.last_mut() {
+            if self.assignment[prev_decision.var_id] == Some(false) {
+                // Decision was already 'false'. Revert and backtrack further.
+                self.assignment[prev_decision.var_id] = prev_decision.old_value;
+                self.assign_history.pop();
+                return false; // Flip failed
+            } else {
+                // Already tried 'true'. Now try 'false'.
+                self.assignment[prev_decision.var_id] = Some(false);
+                return true; // Flip successful
+            }
+        }
+        false // No previous decision to flip
     }
 }
 
