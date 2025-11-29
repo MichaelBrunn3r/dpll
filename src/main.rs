@@ -64,16 +64,19 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn solve_file(path: &Path, verify: bool, stats: &mut Stats) -> Result<(), Box<dyn Error>> {
     println!("---\nProcessing file: {:?}\n---", &path);
     stats.processed += 1;
-
     let start = Instant::now();
-    let file = File::open(path)?;
-    // SAFETY: mapping a file is safe as long as the file isn't modified concurrently.
-    let mmap = unsafe { Mmap::map(&file)? };
 
-    let parse_start = Instant::now();
-    let problem = parse_dimacs_cnf(&mmap)?;
-    let parse_elapsed = parse_start.elapsed();
-    stats.parse_durations.push(parse_elapsed);
+    let problem = {
+        let file = File::open(path)?;
+        // SAFETY: mapping a file is safe as long as the file isn't modified concurrently.
+        let mmap = unsafe { Mmap::map(&file)? };
+
+        let parse_start = Instant::now();
+        let problem = parse_dimacs_cnf(&mmap)?;
+        let parse_elapsed = parse_start.elapsed();
+        stats.parse_durations.push(parse_elapsed);
+        problem
+    };
     println!(
         "Problem: {} variables, {} clauses",
         problem.num_vars,
