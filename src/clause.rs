@@ -36,8 +36,8 @@ impl ClauseView<'_> {
 
     /// For a given partial assignment, finds a unit literal in the clause if it exists.
     pub fn find_unit_literal(&self, assignment: &[Option<bool>]) -> Option<Lit> {
-        let mut unassigned_lit = None;
-        let mut unassigned_count = 0;
+        let mut unassigned_count = 0usize;
+        let mut unit_lit = None;
 
         for &lit in self.0 {
             let is_pos = lit.is_pos();
@@ -46,24 +46,23 @@ impl ClauseView<'_> {
                     if is_pos {
                         return None;
                     }
-                } // Clause Satisfied
+                }
                 Some(false) => {
                     if !is_pos {
                         return None;
                     }
-                } // Clause Satisfied
+                }
                 None => {
+                    if unassigned_count > 0 {
+                        return None;
+                    }
                     unassigned_count += 1;
-                    unassigned_lit = Some(lit);
+                    unit_lit = Some(lit);
                 }
             }
         }
 
-        if unassigned_count == 1 {
-            unassigned_lit
-        } else {
-            None
-        }
+        unit_lit
     }
 
     /// Checks if the clause is satisfied by the given assignment.
