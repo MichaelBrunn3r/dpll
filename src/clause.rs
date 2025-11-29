@@ -66,7 +66,7 @@ impl ClauseView<'_> {
     }
 
     /// Checks if the clause is satisfied by the given assignment.
-    pub fn satisfied_by(&self, assignment: &[bool]) -> bool {
+    pub fn is_satisfied_by(&self, assignment: &[bool]) -> bool {
         for &lit in self.0 {
             if lit.eval_with(assignment[lit.var_id()]) {
                 return true;
@@ -74,6 +74,40 @@ impl ClauseView<'_> {
         }
         false
     }
+
+    /// Evaluates the clause under the given partial assignment.
+    pub fn eval_with(&self, assignment: &[Option<bool>]) -> ClauseState {
+        let mut unassigned_count = 0usize;
+        let mut unit_lit = None;
+
+        for &lit in self.0 {
+            if let Some(val) = assignment[lit.var_id()] {
+                if lit.eval_with(val) {
+                    return ClauseState::Satisfied;
+                }
+            } else {
+                unassigned_count += 1;
+                unit_lit = Some(lit);
+            }
+        }
+
+        match unassigned_count {
+            0 => ClauseState::Unsatisfied,                 // All assigned false
+            1 => ClauseState::Unit(unit_lit.unwrap()),     // Exactly one unassigned, others false
+            _ => ClauseState::Undecided(unassigned_count), // More than one unassigned
+        }
+    }
+}
+
+pub enum ClauseState {
+    /// Under the current assignment, the clause is satisfied (at least one literal evaluates to true).
+    Satisfied,
+    /// Under the current assignment, the clause is unsatisfied (all literals evaluate to false).
+    Unsatisfied,
+    /// Under the current assignment, the clause is a unit clause (exactly one unassigned literal, others evaluate to false).
+    Unit(Lit),
+    /// Under the current assignment, the clause is undecided (more than one unassigned literal).
+    Undecided(usize),
 }
 
 impl<'a> From<&'a [Lit]> for ClauseView<'a> {

@@ -102,7 +102,7 @@ fn solve_file(path: &Path, verify: bool, stats: &mut Stats) -> Result<(), Box<dy
             }
 
             if verify {
-                match problem.verify(solution) {
+                match problem.verify_solution(solution) {
                     Ok(()) => {
                         print!("OK");
                         stats.verified_count += 1;
