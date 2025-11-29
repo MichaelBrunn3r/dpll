@@ -43,7 +43,7 @@ impl Problem {
             self.clause_literals.push(lit);
 
             // Add this clause to the occurrence list of the literal
-            self.lit_occurrences[lit.to_usize()].push(clause_idx);
+            self.lit_occurrences[lit.0 as usize].push(clause_idx);
         }
 
         self.clause_spans.push(ClauseSpan { start, len });
@@ -83,30 +83,30 @@ impl Problem {
                 }
 
                 let mut backtracked = false;
-                while let Some((lit, tried_flipped, old_trail_len)) = stack.pop() {
+                while let Some((lit, tried_negated, old_trail_len)) = stack.pop() {
                     // Undo trail
                     while trail.len() > old_trail_len {
                         let l = trail.pop().unwrap();
-                        assignment[l.var()] = LBool::UNDEF;
+                        assignment[l.var_index()] = LBool::UNDEF;
                     }
 
-                    if !tried_flipped {
+                    if !tried_negated {
                         // We tried 'lit' (e.g. True). Now try '!lit' (False).
-                        let flipped = lit.negate();
+                        let negated = lit.negated();
 
                         // Set value
-                        assignment[flipped.var()] = if flipped.is_pos() {
+                        assignment[negated.var_index()] = if negated.is_pos() {
                             LBool::TRUE
                         } else {
                             LBool::FALSE
                         };
-                        trail.push(flipped);
+                        trail.push(negated);
 
-                        // Push flipped to stack
-                        stack.push((flipped, true, old_trail_len));
+                        // Push negated to stack
+                        stack.push((negated, true, old_trail_len));
 
                         // We must process this new assignment in propagation next loop
-                        prop_queue.push(flipped);
+                        prop_queue.push(negated);
 
                         backtracked = true;
                         break;
@@ -193,9 +193,9 @@ impl Problem {
             // We need to check clauses that contain the NEGATION of what was just assigned.
             // Why? Because those clauses just lost a literal (it became false).
             // Clauses containing 'just_assigned_true' are already satisfied.
-            let falsified_lit = just_assigned_true.negate();
+            let falsified_lit = just_assigned_true.negated();
 
-            for &clause_idx in &self.lit_occurrences[falsified_lit.to_usize()] {
+            for &clause_idx in &self.lit_occurrences[falsified_lit.0 as usize] {
                 if let Some(unit_lit) = self.check_clause(clause_idx, assignment) {
                     // Found a unit!
                     if self.apply_lit(unit_lit, assignment, trail, queue) {
@@ -224,10 +224,10 @@ impl Problem {
         } else {
             LBool::FALSE
         };
-        let current = assignment[lit.var()];
+        let current = assignment[lit.var_index()];
 
         if current == LBool::UNDEF {
-            assignment[lit.var()] = val;
+            assignment[lit.var_index()] = val;
             trail.push(lit);
             queue.push(lit);
             false
@@ -246,7 +246,7 @@ impl Problem {
 
         for &lit in clause {
             let is_pos = lit.is_pos();
-            match assignment[lit.var()] {
+            match assignment[lit.var_index()] {
                 LBool::TRUE => {
                     if is_pos {
                         return None;
@@ -276,7 +276,7 @@ impl Problem {
 
         // Conflict if ALL literals evaluate to false
         for &lit in clause {
-            match assignment[lit.var()] {
+            match assignment[lit.var_index()] {
                 LBool::UNDEF => return false, // Not a conflict yet
                 LBool::TRUE => {
                     if lit.is_pos() {
@@ -304,7 +304,7 @@ impl Problem {
 
             for lit in clause {
                 // Get the boolean value assigned to this variable
-                let var_val = assignment[lit.var()];
+                let var_val = assignment[lit.var_index()];
 
                 // Check if the literal evaluates to true
                 // lit.is_pos() returns true for X, false for !X
@@ -353,24 +353,19 @@ impl Lit {
         Lit((var as u32) << 1 | (!is_pos as u32))
     }
 
-    #[inline]
-    fn var(&self) -> usize {
+    /// Returns the variable index (0-based).
+    fn var_index(&self) -> usize {
         (self.0 >> 1) as usize
     }
 
-    #[inline]
+    /// Returns true if the literal is positive.
     fn is_pos(&self) -> bool {
         (self.0 & 1) == 0
     }
 
-    #[inline]
-    fn negate(&self) -> Self {
+    /// Returns the negation of the literal.
+    fn negated(&self) -> Self {
         Lit(self.0 ^ 1)
-    }
-
-    #[inline]
-    fn to_usize(&self) -> usize {
-        self.0 as usize
     }
 }
 
@@ -385,9 +380,9 @@ impl From<i32> for Lit {
 impl std::fmt::Display for Lit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.is_pos() {
-            write!(f, "{}", self.var() + 1)
+            write!(f, "{}", self.var_index() + 1)
         } else {
-            write!(f, "¬{}", self.var() + 1)
+            write!(f, "¬{}", self.var_index() + 1)
         }
     }
 }
@@ -410,7 +405,7 @@ pub type ClauseView<'a> = &'a [Lit];
 /// Assumes the clause is sorted and contains unique literals.
 fn is_tautology(clause: ClauseView) -> bool {
     for i in 0..clause.len().saturating_sub(1) {
-        if clause[i].var() == clause[i + 1].var() {
+        if clause[i].var_index() == clause[i + 1].var_index() {
             return true;
         }
     }
