@@ -1,53 +1,52 @@
-use crate::parser::ClauseLiteral;
-
 pub mod parser;
 pub mod utils;
-
-/// A view of a clauses literals.
-pub type ClauseView<'a> = &'a [Lit];
 
 pub struct Problem {
     pub num_vars: usize,
 
-    /// A flat vector storing all clause literals sequentially.
-    /// E.g. clauses `1 -3`, `2  3 -1` are stored as \[Lit(1), Lit(-3), Lit(2), Lit(3), Lit(-1)\]
+    /// A flat vector storing all clause literals sequentially. Literals are sorted and unique within each clause.
+    /// E.g. clauses `1 -3`, `2  3 -1` are stored as \[+1, -3, -1, +2, +3\]
     clause_literals: Vec<Lit>,
 
-    // (start_index, length) in clause_literals for each clause
-    clause_ranges: Vec<(u32, u32)>,
+    /// Spans (start, length) for each clause in the flat literals vector.
+    /// E.g. for the above example, we have two spans: (0,2) and (2,3)
+    clause_spans: Vec<ClauseSpan>,
 
-    // OCCURRENCE LIST (Adjacency List)
-    // Map: Lit (as usize) -> List of Clause Indices that contain this literal.
-    // This allows us to only visit relevant clauses during propagation.
-    occurrences: Vec<Vec<usize>>,
+    /// Maps each literal to the list of clauses it appears in.
+    lit_occurrences: Vec<Vec<ClauseID>>,
 }
 
 impl Problem {
-    pub fn new(num_vars: usize) -> Self {
-        // Pre-allocate occurrences: 2 * num_vars (for pos and neg literals)
-        let occurrences = vec![Vec::new(); num_vars * 2];
+    pub fn new(num_vars: usize, num_clauses: usize) -> Self {
         Problem {
             num_vars,
             clause_literals: Vec::new(),
-            clause_ranges: Vec::new(),
-            occurrences,
+            clause_spans: Vec::with_capacity(num_clauses),
+            lit_occurrences: vec![Vec::new(); num_vars * 2], // Each var has pos and neg literal
         }
     }
 
-    pub fn add_clause(&mut self, lits: &[ClauseLiteral]) {
+    pub fn add_clause(&mut self, lits: &mut Vec<Lit>) {
+        // Ensure literals are unique and sorted
+        lits.sort_unstable();
+        lits.dedup();
+
+        if is_tautology(lits) {
+            return; // Ignore tautological clauses
+        }
+
         let start = self.clause_literals.len() as u32;
         let len = lits.len() as u32;
-        let clause_idx = self.clause_ranges.len();
+        let clause_idx = self.clause_spans.len();
 
-        for &(var, is_pos) in lits {
-            let lit = Lit::new(var, is_pos);
+        for &lit in lits.iter() {
             self.clause_literals.push(lit);
 
             // Add this clause to the occurrence list of the literal
-            self.occurrences[lit.to_usize()].push(clause_idx);
+            self.lit_occurrences[lit.to_usize()].push(clause_idx);
         }
 
-        self.clause_ranges.push((start, len));
+        self.clause_spans.push(ClauseSpan { start, len });
     }
 
     pub fn solve(&self) -> Option<Vec<bool>> {
@@ -174,7 +173,7 @@ impl Problem {
         // EDGE CASE: Initial Propagation (before any decisions)
         if queue.is_empty() && trail.is_empty() {
             // Scan all clauses once to find initial units
-            for clause_idx in 0..self.clause_ranges.len() {
+            for clause_idx in 0..self.clause_spans.len() {
                 if let Some(l) = self.check_clause(clause_idx, assignment) {
                     if self.apply_lit(l, assignment, trail, queue) {
                         return true;
@@ -196,7 +195,7 @@ impl Problem {
             // Clauses containing 'just_assigned_true' are already satisfied.
             let falsified_lit = just_assigned_true.negate();
 
-            for &clause_idx in &self.occurrences[falsified_lit.to_usize()] {
+            for &clause_idx in &self.lit_occurrences[falsified_lit.to_usize()] {
                 if let Some(unit_lit) = self.check_clause(clause_idx, assignment) {
                     // Found a unit!
                     if self.apply_lit(unit_lit, assignment, trail, queue) {
@@ -258,7 +257,7 @@ impl Problem {
                         return None;
                     }
                 } // Clause Satisfied
-                LBool::UNDEF | _ => {
+                LBool::UNDEF => {
                     // Treat any unexpected numeric LBool value as UNDEF (unassigned)
                     unassigned_count += 1;
                     unassigned_lit = Some(lit);
@@ -273,24 +272,22 @@ impl Problem {
         }
     }
     fn is_clause_conflict(&self, clause_idx: usize, assignment: &[LBool]) -> bool {
-        let (start, len) = self.clause_ranges[clause_idx];
-        let slice = &self.clause_literals[start as usize..(start + len) as usize];
+        let clause = self.clause_at(clause_idx);
 
         // Conflict if ALL literals evaluate to false
-        for &lit in slice {
+        for &lit in clause {
             match assignment[lit.var()] {
                 LBool::UNDEF => return false, // Not a conflict yet
                 LBool::TRUE => {
                     if lit.is_pos() {
                         return false;
                     }
-                } // Satisfied
+                }
                 LBool::FALSE => {
                     if !lit.is_pos() {
                         return false;
                     }
-                } // Satisfied
-                _ => return false, // Treat unexpected numeric LBool values as UNDEF (not a conflict)
+                }
             }
         }
         true
@@ -327,27 +324,27 @@ impl Problem {
     }
 
     pub fn num_clauses(&self) -> usize {
-        self.clause_ranges.len()
+        self.clause_spans.len()
     }
 
     /// Returns a view of the clause at the specified index.
     pub fn clause_at<'a>(&'a self, clause_idx: usize) -> ClauseView<'a> {
-        let (start, len) = self.clause_ranges[clause_idx];
-        &self.clause_literals[start as usize..(start + len) as usize]
+        let span = &self.clause_spans[clause_idx];
+        &self.clause_literals[span.start as usize..span.end()]
     }
 
     /// Returns an iterator over views of all clauses in the problem.
     pub fn clauses(&self) -> impl Iterator<Item = ClauseView<'_>> {
-        self.clause_ranges
+        self.clause_spans
             .iter()
-            .map(move |&(start, len)| &self.clause_literals[start as usize..(start + len) as usize])
+            .map(move |span| &self.clause_literals[span.start as usize..span.end()])
     }
 }
 
 // Represents a literal as an integer.
 // Even numbers are positive literals (v), Odd numbers are negative (!v).
 // Var 0 -> Lit 0 (pos), Lit 1 (neg)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Lit(u32);
 
 impl Lit {
@@ -377,10 +374,113 @@ impl Lit {
     }
 }
 
+impl From<i32> for Lit {
+    fn from(value: i32) -> Self {
+        let var = value.abs() as usize - 1;
+        let is_pos = value > 0;
+        Lit::new(var, is_pos)
+    }
+}
+
+impl std::fmt::Display for Lit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_pos() {
+            write!(f, "{}", self.var() + 1)
+        } else {
+            write!(f, "¬{}", self.var() + 1)
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum LBool {
     UNDEF = 0,
     TRUE = 1,
     FALSE = 2,
+}
+
+/// Identifier for a clause that is unique within a Problem.
+type ClauseID = usize;
+
+/// A view of a clauses literals.
+pub type ClauseView<'a> = &'a [Lit];
+
+/// Checks if a clause is a tautology (contains both a literal and its negation).
+/// Assumes the clause is sorted and contains unique literals.
+fn is_tautology(clause: ClauseView) -> bool {
+    for i in 0..clause.len().saturating_sub(1) {
+        if clause[i].var() == clause[i + 1].var() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Span (start, length) of a clause within a flat clause literals array.
+#[derive(Clone, Copy)]
+struct ClauseSpan {
+    start: u32,
+    len: u32,
+}
+
+impl ClauseSpan {
+    #[inline]
+    fn end(&self) -> usize {
+        (self.start + self.len as u32) as usize
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use std::cmp::Ordering;
+
+    use super::*;
+
+    #[test]
+    fn test_lit_order() {
+        let cases: Vec<(i32, i32, Ordering)> = vec![
+            (1, 2, Ordering::Less),
+            (2, 1, Ordering::Greater),
+            (1, -1, Ordering::Less),
+            (-1, 1, Ordering::Greater),
+            (-2, -1, Ordering::Greater),
+            (-1, -2, Ordering::Less),
+            (3, 3, Ordering::Equal),
+            (-3, -3, Ordering::Equal),
+        ];
+
+        for (a, b, expected) in cases {
+            let lit_a = Lit::from(a);
+            let lit_b = Lit::from(b);
+            assert_eq!(lit_a.cmp(&lit_b), expected, "Comparing {} and {}", a, b);
+        }
+    }
+
+    #[test]
+    fn test_is_tautology() {
+        let cases: Vec<(Vec<i32>, bool)> = vec![
+            (vec![1, -1], true),
+            (vec![1, 2, -2], true),
+            (vec![-3, 3, 4], true),
+            (vec![1, 2, 3], false),
+            (vec![-1, -2, -3], false),
+            (vec![1, -2, 3], false),
+            (vec![], false),
+        ];
+
+        for (clause_ints, expected) in cases {
+            let mut clause: Vec<Lit> = clause_ints.iter().map(|&x| Lit::from(x)).collect();
+            clause.sort_unstable();
+            clause.dedup();
+
+            assert_eq!(
+                is_tautology(&clause),
+                expected,
+                "Tautology check failed for clause {:?}",
+                clause_ints
+            );
+        }
+    }
 }

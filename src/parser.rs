@@ -1,5 +1,5 @@
 // Remove Clause from imports, as it's no longer a public struct we construct manually
-use crate::Problem;
+use crate::{Lit, Problem};
 
 /// Parses a DIMACS CNF formatted byte array into a Problem instance.
 pub fn parse_dimacs_cnf(data: &[u8]) -> Result<Problem, String> {
@@ -28,10 +28,10 @@ pub fn parse_dimacs_cnf(data: &[u8]) -> Result<Problem, String> {
         .parse_usize()
         .ok_or_else(|| "Expected number of clauses".to_string())?;
 
-    let mut problem = Problem::new(num_vars);
+    let mut problem = Problem::new(num_vars, num_clauses);
 
     // Reusable buffer for clause literals
-    let mut clause_buffer: Vec<ClauseLiteral> = Vec::with_capacity(8);
+    let mut clause_buffer: Vec<Lit> = Vec::with_capacity(8);
 
     // Parse each clause
     for _ in 0..num_clauses {
@@ -63,17 +63,14 @@ pub fn parse_dimacs_cnf(data: &[u8]) -> Result<Problem, String> {
             // DIMACS variables are 1-indexed; convert to 0-indexed
             let var_idx = literal - 1;
 
-            clause_buffer.push((var_idx, !is_negated));
+            clause_buffer.push(Lit::new(var_idx, !is_negated));
         }
 
-        problem.add_clause(&clause_buffer);
+        problem.add_clause(&mut clause_buffer);
     }
 
     Ok(problem)
 }
-
-/// A literal in a clause represented as (variable_index, is_positive).
-pub type ClauseLiteral = (usize, bool);
 
 /// An iterator over a byte array with utility methods for parsing.
 /// Performs no bounds checking, because of the assumption that the DIMACS input is well-formed and ends with trailing unused data (after '%').
