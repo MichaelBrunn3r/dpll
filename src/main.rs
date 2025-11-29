@@ -80,7 +80,7 @@ fn solve_file(path: &Path, verify: bool, stats: &mut Stats) -> Result<(), Box<dy
     println!(
         "Problem: {} variables, {} clauses",
         problem.num_vars,
-        problem.num_clauses()
+        problem.clauses.len()
     );
 
     let solve_start = Instant::now();

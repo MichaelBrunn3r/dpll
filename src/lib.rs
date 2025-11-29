@@ -1,4 +1,4 @@
-use crate::clause::{ClauseState, ClauseView, Lit};
+use crate::clause::{Clause, ClauseState, Lit};
 
 pub mod clause;
 pub mod parser;
@@ -6,56 +6,39 @@ pub mod utils;
 
 pub struct Problem {
     pub num_vars: usize,
-
-    /// A flat vector storing all clause literals sequentially. Literals are sorted and unique within each clause.
-    /// E.g. clauses `1 -3`, `2  3 -1` are stored as \[+1, -3, -1, +2, +3\]
-    clause_literals: Vec<Lit>,
-
-    /// Spans (start, length) for each clause in the flat literals vector.
-    /// E.g. for the above example, we have two spans: (0,2) and (2,3)
-    clause_spans: Vec<ClauseSpan>,
-
+    pub clauses: Vec<Clause>,
     /// Maps each literal to the list of clauses it appears in.
-    lit_occurrences: Vec<Vec<ClauseID>>,
+    lit2clauses: Vec<Vec<ClauseID>>,
 }
 
 impl Problem {
     pub fn new(num_vars: usize, num_clauses: usize) -> Self {
         Problem {
             num_vars,
-            clause_literals: Vec::new(),
-            clause_spans: Vec::with_capacity(num_clauses),
-            lit_occurrences: vec![Vec::new(); num_vars * 2], // Each var has pos and neg literal
+            clauses: Vec::with_capacity(num_clauses),
+            lit2clauses: vec![Vec::new(); num_vars * 2], // Each variable can be positive or negated
         }
     }
 
-    pub fn add_clause(&mut self, lits: &mut Vec<Lit>) {
+    pub fn add_clause(&mut self, clause: &mut Clause) {
         // Ensure literals are unique and sorted
-        lits.sort_unstable();
-        lits.dedup();
+        clause.0.sort_unstable();
+        clause.0.dedup();
 
         // Ignore tautological clauses
-        if ClauseView::from(lits.as_slice()).is_tautology() {
+        if clause.is_tautology() {
             return;
         }
 
-        let start = self.clause_literals.len() as u32;
-        let len = lits.len() as u32;
-        let clause_idx = self.clause_spans.len();
-
-        // Add literals to the flat vector and update occurrences
-        for lit in lits.drain(0..) {
-            self.clause_literals.push(lit);
-
-            // Add this clause to the occurrence list of the literal
-            self.lit_occurrences[lit.0 as usize].push(clause_idx);
+        let clause_id = self.clauses.len();
+        for lit in &clause.0 {
+            self.lit2clauses[lit.0 as usize].push(clause_id);
         }
 
-        self.clause_spans.push(ClauseSpan { start, len });
+        self.clauses.push(clause.clone());
     }
 
     pub fn solve(&self) -> Option<Vec<bool>> {
-        // Flat vector is faster than Vec<Option<bool>>
         let assignment = vec![None; self.num_vars];
         self.dpll(assignment)
     }
@@ -70,7 +53,7 @@ impl Problem {
                 let mut all_clauses_satisfied = true;
                 let mut unit_lit: Option<Lit> = None;
 
-                'find_unit: for clause in self.clauses() {
+                'find_unit: for clause in &self.clauses {
                     match clause.eval_with(&assignment) {
                         ClauseState::Unsatisfied => continue 'backtrack, // conflict => backtrack
                         ClauseState::Satisfied => continue 'find_unit, // 1 clause satisfied => check next
@@ -140,7 +123,7 @@ impl Problem {
             "Assignment length does not match number of variables."
         );
 
-        for (i, clause) in self.clauses().enumerate() {
+        for (i, clause) in self.clauses.iter().enumerate() {
             if !clause.is_satisfied_by(solution) {
                 return Err(format!("Clause {} is unsatisfied.", i));
             }
@@ -148,38 +131,7 @@ impl Problem {
 
         Ok(())
     }
-
-    pub fn num_clauses(&self) -> usize {
-        self.clause_spans.len()
-    }
-
-    /// Returns a view of the clause at the specified index.
-    pub fn clause_at<'a>(&'a self, clause_idx: usize) -> ClauseView<'a> {
-        let span = &self.clause_spans[clause_idx];
-        ClauseView::from(&self.clause_literals[span.start as usize..span.end()])
-    }
-
-    /// Returns an iterator over views of all clauses in the problem.
-    pub fn clauses(&self) -> impl Iterator<Item = ClauseView<'_>> {
-        self.clause_spans.iter().map(move |span| {
-            ClauseView::from(&self.clause_literals[span.start as usize..span.end()])
-        })
-    }
 }
 
 /// Identifier for a clause that is unique within a Problem.
 type ClauseID = usize;
-
-/// Span (start, length) of a clause within a flat clause literals array.
-#[derive(Clone, Copy)]
-struct ClauseSpan {
-    start: u32,
-    len: u32,
-}
-
-impl ClauseSpan {
-    #[inline]
-    fn end(&self) -> usize {
-        (self.start + self.len as u32) as usize
-    }
-}

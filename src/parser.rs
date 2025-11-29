@@ -1,5 +1,5 @@
 // Remove Clause from imports, as it's no longer a public struct we construct manually
-use crate::{Lit, Problem};
+use crate::{Lit, Problem, clause::Clause};
 
 /// Parses a DIMACS CNF formatted byte array into a Problem instance.
 pub fn parse_dimacs_cnf(data: &[u8]) -> Result<Problem, String> {
@@ -31,11 +31,11 @@ pub fn parse_dimacs_cnf(data: &[u8]) -> Result<Problem, String> {
     let mut problem = Problem::new(num_vars, num_clauses);
 
     // Reusable buffer for clause literals
-    let mut clause_buffer: Vec<Lit> = Vec::with_capacity(8);
+    let mut clause_buffer = Clause(Vec::new());
 
     // Parse each clause
     for _ in 0..num_clauses {
-        clause_buffer.clear();
+        clause_buffer.0.clear();
 
         // Parse literals until we hit the clause separator 0
         loop {
@@ -63,7 +63,7 @@ pub fn parse_dimacs_cnf(data: &[u8]) -> Result<Problem, String> {
             // DIMACS variables are 1-indexed; convert to 0-indexed
             let var_idx = literal - 1;
 
-            clause_buffer.push(Lit::new(var_idx, !is_negated));
+            clause_buffer.0.push(Lit::new(var_idx, !is_negated));
         }
 
         problem.add_clause(&mut clause_buffer);

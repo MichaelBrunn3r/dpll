@@ -1,7 +1,8 @@
 /// A view of a clauses literals.
-pub struct ClauseView<'a>(&'a [Lit]);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Clause(pub Vec<Lit>);
 
-impl ClauseView<'_> {
+impl Clause {
     /// Checks if a clause is a tautology (contains both a literal and its negation).
     /// Assumes the clause is sorted and contains unique literals.
     pub fn is_tautology(&self) -> bool {
@@ -16,7 +17,7 @@ impl ClauseView<'_> {
     /// Checks if the clause conflicts with the given partial assignment.
     /// A conflict occurs if all literals in the clause evaluate to false.
     pub fn conflicts_with(&self, assignment: &[Option<bool>]) -> bool {
-        for &lit in self.0 {
+        for &lit in &self.0 {
             match assignment[lit.var_id()] {
                 None => return false, // Not a conflict yet
                 Some(true) => {
@@ -39,7 +40,7 @@ impl ClauseView<'_> {
         let mut unassigned_count = 0usize;
         let mut unit_lit = None;
 
-        for &lit in self.0 {
+        for &lit in &self.0 {
             let is_pos = lit.is_pos();
             match assignment[lit.var_id()] {
                 Some(true) => {
@@ -67,7 +68,7 @@ impl ClauseView<'_> {
 
     /// Checks if the clause is satisfied by the given assignment.
     pub fn is_satisfied_by(&self, assignment: &[bool]) -> bool {
-        for &lit in self.0 {
+        for &lit in &self.0 {
             if lit.eval_with(assignment[lit.var_id()]) {
                 return true;
             }
@@ -80,7 +81,7 @@ impl ClauseView<'_> {
         let mut unassigned_count = 0usize;
         let mut unit_lit = None;
 
-        for &lit in self.0 {
+        for &lit in &self.0 {
             if let Some(val) = assignment[lit.var_id()] {
                 if lit.eval_with(val) {
                     return ClauseState::Satisfied;
@@ -99,6 +100,12 @@ impl ClauseView<'_> {
     }
 }
 
+impl std::iter::FromIterator<Lit> for Clause {
+    fn from_iter<I: IntoIterator<Item = Lit>>(iter: I) -> Self {
+        Clause(iter.into_iter().collect())
+    }
+}
+
 pub enum ClauseState {
     /// Under the current assignment, the clause is satisfied (at least one literal evaluates to true).
     Satisfied,
@@ -108,27 +115,6 @@ pub enum ClauseState {
     Unit(Lit),
     /// Under the current assignment, the clause is undecided (more than one unassigned literal).
     Undecided(usize),
-}
-
-impl<'a> From<&'a [Lit]> for ClauseView<'a> {
-    fn from(slice: &'a [Lit]) -> Self {
-        ClauseView(slice)
-    }
-}
-
-impl<'a> From<&'a Vec<Lit>> for ClauseView<'a> {
-    fn from(vec: &'a Vec<Lit>) -> Self {
-        ClauseView(vec.as_slice())
-    }
-}
-
-impl<'a> IntoIterator for ClauseView<'a> {
-    type Item = &'a Lit;
-    type IntoIter = std::slice::Iter<'a, Lit>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
-    }
 }
 
 // --------------------------------
@@ -233,12 +219,12 @@ mod tests {
         ];
 
         for (clause_ints, expected) in cases {
-            let mut clause: Vec<Lit> = clause_ints.iter().map(|&x| Lit::from(x)).collect();
-            clause.sort_unstable();
-            clause.dedup();
+            let mut clause: Clause = clause_ints.iter().map(|&x| Lit::from(x)).collect();
+            clause.0.sort_unstable();
+            clause.0.dedup();
 
             assert_eq!(
-                ClauseView::from(&clause).is_tautology(),
+                clause.is_tautology(),
                 expected,
                 "Tautology check failed for clause {:?}",
                 clause_ints

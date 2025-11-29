@@ -17,7 +17,7 @@ fn bench_solve(c: &mut Criterion) {
     let data = fs::read("./benches/uf20-01.cnf").expect("failed to read fixture");
     let problem = dpll::parser::parse_dimacs_cnf(&data).expect("failed to parse fixture");
     assert_eq!(problem.num_vars, 20);
-    assert_eq!(problem.num_clauses(), 91);
+    assert_eq!(problem.clauses.len(), 91);
 
     c.bench_function("solve", |b| {
         b.iter(|| {
