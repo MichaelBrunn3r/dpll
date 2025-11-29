@@ -51,16 +51,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 _ => {}
             }
         }
-
-        if stats.processed > 1 {
-            stats.print_summary();
-        }
     } else if path.is_file() {
         solve_file(&path, args.verify, stats)?;
     } else {
         return Err(format!("Path {:?} is not a file or directory", path).into());
     }
 
+    stats.print_summary();
     Ok(())
 }
 
@@ -73,18 +70,24 @@ fn solve_file(path: &Path, verify: bool, stats: &mut Stats) -> Result<(), Box<dy
     // SAFETY: mapping a file is safe as long as the file isn't modified concurrently.
     let mmap = unsafe { Mmap::map(&file)? };
 
+    let parse_start = Instant::now();
     let problem = parse_dimacs_cnf(&mmap)?;
+    let parse_elapsed = parse_start.elapsed();
+    stats.parse_durations.push(parse_elapsed);
     println!(
         "Problem: {} variables, {} clauses",
         problem.num_vars,
         problem.num_clauses()
     );
 
+    let solve_start = Instant::now();
     match &problem.solve() {
         Some(solution) => {
             stats.sat_count += 1;
-            let elapsed = start.elapsed();
-            stats.durations.push(elapsed);
+            let solve_elapsed = solve_start.elapsed();
+            let total_elapsed = start.elapsed();
+            stats.solve_durations.push(solve_elapsed);
+            stats.durations.push(total_elapsed);
 
             print!("SAT! ");
             for (i, val) in solution.iter().enumerate() {
@@ -94,26 +97,29 @@ fn solve_file(path: &Path, verify: bool, stats: &mut Stats) -> Result<(), Box<dy
                     print!("¬{} ", i + 1);
                 }
             }
-            println!();
 
             if verify {
                 match problem.verify(solution) {
                     Ok(()) => {
-                        println!("Solution verified.");
+                        print!("OK");
                         stats.verified_count += 1;
                     }
                     Err(msg) => {
-                        println!("Solution verification FAILED: {}", msg);
+                        print!("FAIL {} ", msg);
                         stats.failed_verifications += 1;
                     }
                 };
             }
 
-            println!("Elapsed: {}", human_duration(elapsed));
+            println!();
         }
         None => {
             stats.unsat_count += 1;
-            println!("UNSAT")
+            let solve_elapsed = solve_start.elapsed();
+            let total_elapsed = start.elapsed();
+            stats.solve_durations.push(solve_elapsed);
+            stats.durations.push(total_elapsed);
+            println!("UNSAT");
         }
     }
 
@@ -127,6 +133,8 @@ struct Stats {
     sat_count: usize,
     unsat_count: usize,
     durations: Vec<Duration>,
+    parse_durations: Vec<Duration>,
+    solve_durations: Vec<Duration>,
     verified_count: usize,
     failed_verifications: usize,
 }
@@ -139,6 +147,8 @@ impl Stats {
             sat_count: 0,
             unsat_count: 0,
             durations: Vec::new(),
+            parse_durations: Vec::new(),
+            solve_durations: Vec::new(),
             verified_count: 0,
             failed_verifications: 0,
         }
@@ -166,28 +176,35 @@ impl Stats {
             );
         }
 
-        if !self.durations.is_empty() {
-            let total_secs: f64 = self.durations.iter().map(|d| d.as_secs_f64()).sum();
-            let avg_secs = total_secs / (self.durations.len() as f64);
-            let mut secs_vec: Vec<f64> = self.durations.iter().map(|d| d.as_secs_f64()).collect();
-            secs_vec.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let min = secs_vec.first().cloned().unwrap_or(0.0);
-            let max = secs_vec.last().cloned().unwrap_or(0.0);
-            let median = if secs_vec.len() % 2 == 1 {
-                secs_vec[secs_vec.len() / 2]
-            } else {
-                let hi = secs_vec.len() / 2;
-                (secs_vec[hi - 1] + secs_vec[hi]) / 2.0
-            };
+        self.print_times_table("Parsing times:", &self.parse_durations);
+        self.print_times_table("Solving times:", &self.solve_durations);
+        self.print_times_table("Total times:", &self.durations);
+    }
 
-            println!(
-                "\ntotal   |   min   | median  |   avg   |  max   \n{:<7} | {:^7} | {:^7} | {:^7} | {:^7}",
-                human_duration(Duration::from_secs_f64(total_secs)),
-                human_duration(Duration::from_secs_f64(min)),
-                human_duration(Duration::from_secs_f64(median)),
-                human_duration(Duration::from_secs_f64(avg_secs)),
-                human_duration(Duration::from_secs_f64(max)),
-            );
+    fn print_times_table(&self, title: &str, durations: &Vec<Duration>) {
+        if durations.is_empty() {
+            return;
         }
+        let total_secs: f64 = durations.iter().map(|d| d.as_secs_f64()).sum();
+        let avg_secs = total_secs / (durations.len() as f64);
+        let mut secs_vec: Vec<f64> = durations.iter().map(|d| d.as_secs_f64()).collect();
+        secs_vec.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let min = secs_vec.first().cloned().unwrap_or(0.0);
+        let max = secs_vec.last().cloned().unwrap_or(0.0);
+        let median = if secs_vec.len() % 2 == 1 {
+            secs_vec[secs_vec.len() / 2]
+        } else {
+            let hi = secs_vec.len() / 2;
+            (secs_vec[hi - 1] + secs_vec[hi]) / 2.0
+        };
+        println!(
+            "\n{}\ntotal   |   min   | median  |   avg   |  max   \n{:<7} | {:^7} | {:^7} | {:^7} | {:^7}",
+            title,
+            human_duration(Duration::from_secs_f64(total_secs)),
+            human_duration(Duration::from_secs_f64(min)),
+            human_duration(Duration::from_secs_f64(median)),
+            human_duration(Duration::from_secs_f64(avg_secs)),
+            human_duration(Duration::from_secs_f64(max)),
+        );
     }
 }
