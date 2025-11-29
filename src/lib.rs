@@ -82,79 +82,92 @@ impl<'p> DPLLSolver<'p> {
 
     pub fn solve(&mut self) -> Option<Vec<bool>> {
         'backtrack: loop {
-            // --- Phase 1: Unit propagation ---
-            // Repeat until no unit clauses or conflicts are found
-            'unit_prop: loop {
-                let mut all_clauses_satisfied = true;
-                let mut unit_lit: Option<Lit> = None;
-
-                'find_unit: for clause in &self.problem.clauses {
-                    match clause.eval_with(&self.assignment) {
-                        ClauseState::Satisfied => continue 'find_unit, // 1 clause satisfied => check next
-                        ClauseState::Undecided(_) => {
-                            all_clauses_satisfied = false;
-                            continue 'find_unit; // continue checking for conflicts and unit clauses
-                        }
-                        ClauseState::Unit(unit_literal) => {
-                            // Found a unit clause => forced to assign the unit literal
-                            all_clauses_satisfied = false;
-                            unit_lit = Some(unit_literal);
-                            break 'find_unit;
-                        }
-                        ClauseState::Unsatisfied => {
-                            if !self.backtrack() {
-                                return None; // Unsatisfiable => return UNSAT
-                            }
-                            continue 'backtrack; // Backtracked => restart search
-                        }
+            match self.propagate_units() {
+                PropagationResult::Satisfied => {
+                    return Some(solution_from_assignment(&self.assignment));
+                }
+                PropagationResult::Unsatisfied => {
+                    if !self.backtrack() {
+                        return None; // Cannot backtrack further => UNSAT
                     }
+                    continue 'backtrack; // After backtracking, try unit propagation again
                 }
-
-                if all_clauses_satisfied {
-                    return Some(solution_from_assignment(&self.assignment)); // All clauses satisfied => return the solution
-                }
-
-                if let Some(lit) = unit_lit {
-                    // Assign the unit literal to the value that satisfies the unit clause
-
-                    self.assign_history.push(VariableAssignment {
-                        var_id: lit.var_id(),
-                        old_value: self.assignment[lit.var_id()],
-                    });
-                    self.assignment[lit.var_id()] = Some(lit.is_pos());
-
-                    continue 'unit_prop;
-                } else {
-                    break 'unit_prop; // No unit clause or conflict => proceed to branching
-                }
+                PropagationResult::Undecided => {} // Proceed to branching
             }
 
-            // --- Phase 2: Splitting / Branching ---
-
-            // Find first unassigned variable
-            let decision_var_id = if let Some(var_id) = self
-                .assignment
-                .iter()
-                .enumerate()
-                .find(|(_, val)| val.is_none())
-                .map(|(id, _)| id)
-            {
-                var_id
-            } else {
-                return Some(solution_from_assignment(&self.assignment)); // All variables assigned => return the solution
-            };
-
-            self.decision_level += 1;
-            self.decision_history.push(self.assign_history.len());
-
-            self.assign_history.push(VariableAssignment {
-                var_id: decision_var_id,
-                old_value: self.assignment[decision_var_id],
-            });
-            self.assignment[decision_var_id] = Some(true); // First try assigning 'true'
+            self.make_branching_decision();
         }
     }
 
+    /// Performs unit propagation on the current assignment.
+    fn propagate_units(&mut self) -> PropagationResult {
+        // Repeat until no unit clauses or conflicts are found
+        'unit_prop: loop {
+            let mut all_clauses_satisfied = true;
+            let mut unit_lit: Option<Lit> = None;
+
+            'find_unit: for clause in &self.problem.clauses {
+                match clause.eval_with(&self.assignment) {
+                    ClauseState::Satisfied => continue 'find_unit, // 1 clause satisfied => check next
+                    ClauseState::Undecided(_) => {
+                        all_clauses_satisfied = false;
+                        continue 'find_unit; // continue checking for conflicts and unit clauses
+                    }
+                    ClauseState::Unit(unit_literal) => {
+                        // Found a unit clause => forced to assign the unit literal
+                        all_clauses_satisfied = false;
+                        unit_lit = Some(unit_literal);
+                        break 'find_unit;
+                    }
+                    ClauseState::Unsatisfied => {
+                        return PropagationResult::Unsatisfied;
+                    }
+                }
+            }
+
+            if all_clauses_satisfied {
+                return PropagationResult::Satisfied;
+            }
+
+            if let Some(lit) = unit_lit {
+                // Assign the unit literal to the value that satisfies the unit clause
+
+                self.assign_history.push(VariableAssignment {
+                    var_id: lit.var_id(),
+                    old_value: self.assignment[lit.var_id()],
+                });
+                self.assignment[lit.var_id()] = Some(lit.is_pos());
+
+                continue 'unit_prop;
+            } else {
+                return PropagationResult::Undecided; // No unit clauses or conflicts found
+            }
+        }
+    }
+
+    /// Makes a branching decision by selecting an unassigned variable and assigning it to true.
+    fn make_branching_decision(&mut self) {
+        // Find first unassigned variable
+        let decision_var_id = self
+            .assignment
+            .iter()
+            .enumerate()
+            .find(|(_, val)| val.is_none())
+            .map(|(id, _)| id)
+            .expect("BUG: Should always find an unassigned variable when PropagationResult is Undecided.");
+
+        self.decision_level += 1;
+        self.decision_history.push(self.assign_history.len());
+
+        self.assign_history.push(VariableAssignment {
+            var_id: decision_var_id,
+            old_value: self.assignment[decision_var_id],
+        });
+        self.assignment[decision_var_id] = Some(true); // First try assigning 'true'
+    }
+
+    /// Backtracks until a previous decision can be flipped.
+    /// Returns true if backtracking and flipping was successful, otherwise UNSAT.
     fn backtrack(&mut self) -> bool {
         if self.decision_level == 0 {
             // Cannot backtrack further => UNSAT
@@ -210,6 +223,12 @@ impl<'p> DPLLSolver<'p> {
         }
         false // No previous decision to flip
     }
+}
+
+enum PropagationResult {
+    Satisfied,
+    Unsatisfied,
+    Undecided,
 }
 
 /// Identifier for a clause that is unique within a Problem.

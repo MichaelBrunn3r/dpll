@@ -2,6 +2,7 @@ use std::fs;
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use dpll::DPLLSolver;
 
 fn bench_parse_dimacs(c: &mut Criterion) {
     let data = fs::read("./benches/uf20-01.cnf").expect("failed to read fixture");
@@ -21,7 +22,7 @@ fn bench_solve(c: &mut Criterion) {
 
     c.bench_function("solve", |b| {
         b.iter(|| {
-            let _ = problem.solve();
+            let _ = DPLLSolver::new(black_box(&problem)).solve();
         })
     });
 }
