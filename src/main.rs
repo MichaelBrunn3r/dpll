@@ -1,5 +1,5 @@
 use clap::Parser;
-use dpll::parser::parse_dimacs;
+use dpll::parser::parse_dimacs_cnf;
 use dpll::utils::human_duration;
 use memmap2::Mmap;
 use std::time::{Duration, Instant};
@@ -15,9 +15,9 @@ use std::{
 struct Args {
     #[arg(value_name = "PATH")]
     path: PathBuf,
-    /// Limit number of files to solve when PATH is a directory
-    #[arg(short = 'n', long = "number", value_name = "N")]
-    n: Option<usize>,
+    /// Limit to N files when processing a directory
+    #[arg(short = 'l', long = "limit", value_name = "LIMIT")]
+    limit: Option<usize>,
     /// Verify the solution
     #[arg(long)]
     verify: bool,
@@ -27,6 +27,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     let path = args.path;
+    let mut stats = &mut Stats::new();
 
     if path.is_dir() {
         let mut entries: Vec<PathBuf> = fs::read_dir(&path)?
@@ -36,35 +37,26 @@ fn main() -> Result<(), Box<dyn Error>> {
             .collect();
         entries.sort();
 
-        if let Some(n) = args.n {
-            entries.truncate(n);
+        if let Some(limit) = args.limit {
+            entries.truncate(limit);
         }
 
-        let mut stats = Stats::new(entries.len());
-
         for entry in entries {
-            let start = Instant::now();
-            println!("\n---\nProcessing file: {:?}\n---", &entry);
-            match solve_file(&entry, args.verify) {
-                Ok((opt_solution, verification)) => {
-                    let elapsed = start.elapsed();
-                    stats.record_success(opt_solution, verification, elapsed);
-                    println!("Elapsed: {}", human_duration(elapsed));
-                }
+            println!();
+            match solve_file(&entry, args.verify, &mut stats) {
                 Err(e) => {
                     stats.errors += 1;
                     eprintln!("Error solving {:?}: {}", entry, e);
                 }
+                _ => {}
             }
         }
 
-        stats.print_summary();
+        if stats.processed > 1 {
+            stats.print_summary();
+        }
     } else if path.is_file() {
-        let start = Instant::now();
-        println!("---\nProcessing file: {:?}\n---", &path);
-        solve_file(&path, args.verify)?;
-        let elapsed = start.elapsed();
-        println!("Elapsed: {}", human_duration(elapsed));
+        solve_file(&path, args.verify, stats)?;
     } else {
         return Err(format!("Path {:?} is not a file or directory", path).into());
     }
@@ -72,24 +64,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn solve_file(
-    path: &Path,
-    verify: bool,
-) -> Result<(Option<Vec<bool>>, Option<bool>), Box<dyn Error>> {
+fn solve_file(path: &Path, verify: bool, stats: &mut Stats) -> Result<(), Box<dyn Error>> {
+    println!("---\nProcessing file: {:?}\n---", &path);
+    stats.processed += 1;
+
+    let start = Instant::now();
     let file = File::open(path)?;
     // SAFETY: mapping a file is safe as long as the file isn't modified concurrently.
     let mmap = unsafe { Mmap::map(&file)? };
 
-    let problem = parse_dimacs(&mmap)?;
+    let problem = parse_dimacs_cnf(&mmap)?;
     println!(
         "Problem: {} variables, {} clauses",
         problem.num_vars,
-        problem.clauses.len()
+        problem.num_clauses()
     );
-    let res = problem.solve();
-    let mut verification_status = None;
-    match &res {
+
+    match &problem.solve() {
         Some(solution) => {
+            stats.sat_count += 1;
+            let elapsed = start.elapsed();
+            stats.durations.push(elapsed);
+
             print!("SAT! ");
             for (i, val) in solution.iter().enumerate() {
                 if *val {
@@ -99,20 +95,29 @@ fn solve_file(
                 }
             }
             println!();
+
             if verify {
-                let verified = problem.verify(solution);
-                verification_status = Some(verified);
-                if verified {
-                    println!("Solution verified.");
-                } else {
-                    println!("Verification FAILED.");
-                }
+                match problem.verify(solution) {
+                    Ok(()) => {
+                        println!("Solution verified.");
+                        stats.verified_count += 1;
+                    }
+                    Err(msg) => {
+                        println!("Solution verification FAILED: {}", msg);
+                        stats.failed_verifications += 1;
+                    }
+                };
             }
+
+            println!("Elapsed: {}", human_duration(elapsed));
         }
-        None => println!("UNSAT"),
+        None => {
+            stats.unsat_count += 1;
+            println!("UNSAT")
+        }
     }
 
-    Ok((res, verification_status))
+    Ok(())
 }
 
 /// Aggregated statistics for a directory run.
@@ -127,37 +132,15 @@ struct Stats {
 }
 
 impl Stats {
-    fn new(total_files: usize) -> Self {
+    fn new() -> Self {
         Self {
             processed: 0,
             errors: 0,
             sat_count: 0,
             unsat_count: 0,
-            durations: Vec::with_capacity(total_files),
+            durations: Vec::new(),
             verified_count: 0,
             failed_verifications: 0,
-        }
-    }
-
-    fn record_success(
-        &mut self,
-        solution: Option<Vec<bool>>,
-        verification: Option<bool>,
-        dur: Duration,
-    ) {
-        self.processed += 1;
-        self.durations.push(dur);
-        if solution.is_some() {
-            self.sat_count += 1;
-            if let Some(verified) = verification {
-                if verified {
-                    self.verified_count += 1;
-                } else {
-                    self.failed_verifications += 1;
-                }
-            }
-        } else {
-            self.unsat_count += 1;
         }
     }
 

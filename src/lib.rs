@@ -1,82 +1,20 @@
+use crate::parser::ClauseLiteral;
+
 pub mod parser;
 pub mod utils;
 
-use std::fmt;
-
-// ----------------------
-// DATA TYPES
-// ----------------------
-
-// Represents a literal as an integer.
-// Even numbers are positive literals (v), Odd numbers are negative (!v).
-// Var 0 -> Lit 0 (pos), Lit 1 (neg)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Lit(u32);
-
-impl Lit {
-    #[inline]
-    fn new(var: usize, is_pos: bool) -> Self {
-        Lit((var as u32) << 1 | if is_pos { 0 } else { 1 })
-    }
-
-    #[inline]
-    fn var(&self) -> usize {
-        (self.0 >> 1) as usize
-    }
-
-    #[inline]
-    fn is_pos(&self) -> bool {
-        (self.0 & 1) == 0
-    }
-
-    #[inline]
-    fn negate(&self) -> Self {
-        Lit(self.0 ^ 1)
-    }
-
-    #[inline]
-    fn to_usize(&self) -> usize {
-        self.0 as usize
-    }
-}
-
-// 0: Unassigned, 1: True, 2: False
-// Using u8 is more cache-friendly than Option<bool>
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct LBool(u8);
-
-impl LBool {
-    const UNDEF: LBool = LBool(0);
-    const TRUE: LBool = LBool(1);
-    const FALSE: LBool = LBool(2);
-
-    // Convert boolean to LBool
-    fn from_bool(b: bool) -> Self {
-        if b { Self::TRUE } else { Self::FALSE }
-    }
-
-    // Check if satisfied by a specific boolean assignment
-    fn is_satisfied_by(&self, val: bool) -> bool {
-        match *self {
-            Self::TRUE => val,
-            Self::FALSE => !val,
-            _ => false,
-        }
-    }
-}
-
-// ----------------------
-// PROBLEM STRUCTURE
-// ----------------------
+/// A view of a clauses literals.
+pub type ClauseView<'a> = &'a [Lit];
 
 pub struct Problem {
     pub num_vars: usize,
 
-    // FLAT CLAUSE DATABASE
-    // All literals from all clauses packed sequentially.
-    clause_db: Vec<Lit>,
-    // (start_index, length) in clause_db for each clause
-    pub clauses: Vec<(u32, u32)>,
+    /// A flat vector storing all clause literals sequentially.
+    /// E.g. clauses `1 -3`, `2  3 -1` are stored as \[Lit(1), Lit(-3), Lit(2), Lit(3), Lit(-1)\]
+    clause_literals: Vec<Lit>,
+
+    // (start_index, length) in clause_literals for each clause
+    clause_ranges: Vec<(u32, u32)>,
 
     // OCCURRENCE LIST (Adjacency List)
     // Map: Lit (as usize) -> List of Clause Indices that contain this literal.
@@ -90,27 +28,26 @@ impl Problem {
         let occurrences = vec![Vec::new(); num_vars * 2];
         Problem {
             num_vars,
-            clause_db: Vec::new(),
-            clauses: Vec::new(),
+            clause_literals: Vec::new(),
+            clause_ranges: Vec::new(),
             occurrences,
         }
     }
 
-    // Add a clause using a slice of (variable_index, is_positive)
-    pub fn add_clause(&mut self, lits: &[(usize, bool)]) {
-        let start = self.clause_db.len() as u32;
+    pub fn add_clause(&mut self, lits: &[ClauseLiteral]) {
+        let start = self.clause_literals.len() as u32;
         let len = lits.len() as u32;
-        let clause_idx = self.clauses.len();
+        let clause_idx = self.clause_ranges.len();
 
         for &(var, is_pos) in lits {
             let lit = Lit::new(var, is_pos);
-            self.clause_db.push(lit);
+            self.clause_literals.push(lit);
 
             // Add this clause to the occurrence list of the literal
             self.occurrences[lit.to_usize()].push(clause_idx);
         }
 
-        self.clauses.push((start, len));
+        self.clause_ranges.push((start, len));
     }
 
     pub fn solve(&self) -> Option<Vec<bool>> {
@@ -237,7 +174,7 @@ impl Problem {
         // EDGE CASE: Initial Propagation (before any decisions)
         if queue.is_empty() && trail.is_empty() {
             // Scan all clauses once to find initial units
-            for clause_idx in 0..self.clauses.len() {
+            for clause_idx in 0..self.clause_ranges.len() {
                 if let Some(l) = self.check_clause(clause_idx, assignment) {
                     if self.apply_lit(l, assignment, trail, queue) {
                         return true;
@@ -303,13 +240,12 @@ impl Problem {
     // Returns Some(lit) if the clause is Unit(lit), None otherwise (Satisfied or Unresolved).
     // Conflict detection handled separately or implied if returns None but is all false.
     fn check_clause(&self, clause_idx: usize, assignment: &[LBool]) -> Option<Lit> {
-        let (start, len) = self.clauses[clause_idx];
-        let slice = &self.clause_db[start as usize..(start + len) as usize];
+        let clause = self.clause_at(clause_idx);
 
         let mut unassigned_lit = None;
         let mut unassigned_count = 0;
 
-        for &lit in slice {
+        for &lit in clause {
             let is_pos = lit.is_pos();
             match assignment[lit.var()] {
                 LBool::TRUE => {
@@ -337,8 +273,8 @@ impl Problem {
         }
     }
     fn is_clause_conflict(&self, clause_idx: usize, assignment: &[LBool]) -> bool {
-        let (start, len) = self.clauses[clause_idx];
-        let slice = &self.clause_db[start as usize..(start + len) as usize];
+        let (start, len) = self.clause_ranges[clause_idx];
+        let slice = &self.clause_literals[start as usize..(start + len) as usize];
 
         // Conflict if ALL literals evaluate to false
         for &lit in slice {
@@ -360,20 +296,16 @@ impl Problem {
         true
     }
 
-    pub fn verify(&self, assignment: &[bool]) -> bool {
+    /// Verifies if the given assignment satisfies all clauses in the problem.
+    pub fn verify(&self, assignment: &[bool]) -> Result<(), String> {
         if assignment.len() != self.num_vars {
-            eprintln!("Verification failed: Assignment length mismatch.");
-            return false;
+            return Err("Assignment length mismatch".to_string());
         }
 
-        for (i, &(start, len)) in self.clauses.iter().enumerate() {
+        for (i, clause) in self.clauses().enumerate() {
             let mut clause_satisfied = false;
-            let end = start + len;
 
-            // Iterate over the literals in this specific clause
-            for idx in start..end {
-                let lit = self.clause_db[idx as usize];
-
+            for lit in clause {
                 // Get the boolean value assigned to this variable
                 let var_val = assignment[lit.var()];
 
@@ -387,11 +319,68 @@ impl Problem {
             }
 
             if !clause_satisfied {
-                eprintln!("Verification failed: Clause {} is unsatisfied.", i);
-                return false;
+                return Err(format!("Clause {} is unsatisfied.", i));
             }
         }
 
-        true
+        Ok(())
     }
+
+    pub fn num_clauses(&self) -> usize {
+        self.clause_ranges.len()
+    }
+
+    /// Returns a view of the clause at the specified index.
+    pub fn clause_at<'a>(&'a self, clause_idx: usize) -> ClauseView<'a> {
+        let (start, len) = self.clause_ranges[clause_idx];
+        &self.clause_literals[start as usize..(start + len) as usize]
+    }
+
+    /// Returns an iterator over views of all clauses in the problem.
+    pub fn clauses(&self) -> impl Iterator<Item = ClauseView<'_>> {
+        self.clause_ranges
+            .iter()
+            .map(move |&(start, len)| &self.clause_literals[start as usize..(start + len) as usize])
+    }
+}
+
+// Represents a literal as an integer.
+// Even numbers are positive literals (v), Odd numbers are negative (!v).
+// Var 0 -> Lit 0 (pos), Lit 1 (neg)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Lit(u32);
+
+impl Lit {
+    #[inline]
+    fn new(var: usize, is_pos: bool) -> Self {
+        Lit((var as u32) << 1 | (!is_pos as u32))
+    }
+
+    #[inline]
+    fn var(&self) -> usize {
+        (self.0 >> 1) as usize
+    }
+
+    #[inline]
+    fn is_pos(&self) -> bool {
+        (self.0 & 1) == 0
+    }
+
+    #[inline]
+    fn negate(&self) -> Self {
+        Lit(self.0 ^ 1)
+    }
+
+    #[inline]
+    fn to_usize(&self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum LBool {
+    UNDEF = 0,
+    TRUE = 1,
+    FALSE = 2,
 }
