@@ -18,12 +18,19 @@ pub mod problem;
 pub mod utils;
 
 pub struct SolverPool {
-    job_sender: mpsc::Sender<Job>,
+    job_sender: Option<mpsc::Sender<Job>>,
     _workers: Vec<thread::JoinHandle<()>>,
 }
 
 impl SolverPool {
     pub fn new(num_workers: usize) -> Self {
+        if num_workers <= 1 {
+            return Self {
+                job_sender: None,
+                _workers: Vec::new(),
+            };
+        }
+
         let (tx, rx) = mpsc::channel::<Job>();
         let rx = Arc::new(Mutex::new(rx));
         let mut workers = Vec::with_capacity(num_workers);
@@ -62,12 +69,21 @@ impl SolverPool {
         }
 
         Self {
-            job_sender: tx,
+            job_sender: Some(tx),
             _workers: workers,
         }
     }
 
     pub fn submit(&self, problem: Arc<Problem>) -> Option<Vec<bool>> {
+        let job_sender = match &self.job_sender {
+            Some(tx) => tx,
+            None => {
+                // Single-threaded mode
+                let mut solver = DPLLSolver::new(&problem);
+                return solver.solve();
+            }
+        };
+
         let solution_found = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
 
@@ -82,7 +98,7 @@ impl SolverPool {
                 sender: tx.clone(),
             };
 
-            if self.job_sender.send(job).is_err() {
+            if job_sender.send(job).is_err() {
                 return None; // Failed to send job
             }
         }

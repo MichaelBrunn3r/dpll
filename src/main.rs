@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         cli::NumWorkerThreads::Num(n) => n,
     };
     let pool = SolverPool::new(num_workers);
-    println!("Initialized pool with {} worker threads.", num_workers);
+    println!("Initialized pool with {} worker thread(s).", num_workers);
 
     let path = args.path;
     let mut stats = &mut Stats::new();
