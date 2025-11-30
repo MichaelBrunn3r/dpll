@@ -1,70 +1,28 @@
-use crate::clause::{Clause, ClauseState, Lit};
+use std::ops::{Deref, DerefMut};
+
+use crate::{
+    clause::{ClauseState, Lit},
+    problem::Problem,
+};
 
 pub mod clause;
 pub mod parser;
+pub mod problem;
 pub mod utils;
-
-pub struct Problem {
-    pub num_vars: usize,
-    pub clauses: Vec<Clause>,
-    /// Maps each literal to the list of clauses it appears in.
-    lit2clauses: Vec<Vec<ClauseID>>,
-}
-
-impl Problem {
-    pub fn new(num_vars: usize, num_clauses: usize) -> Self {
-        Problem {
-            num_vars,
-            clauses: Vec::with_capacity(num_clauses),
-            lit2clauses: vec![Vec::new(); num_vars * 2], // Each variable can be positive or negated
-        }
-    }
-
-    pub fn add_clause(&mut self, clause: &mut Clause) {
-        // Ensure literals are unique and sorted
-        clause.0.sort_unstable();
-        clause.0.dedup();
-
-        // Ignore tautological clauses
-        if clause.is_tautology() {
-            return;
-        }
-
-        let clause_id = self.clauses.len();
-        for lit in &clause.0 {
-            self.lit2clauses[lit.0 as usize].push(clause_id);
-        }
-
-        self.clauses.push(clause.clone());
-    }
-
-    /// Verifies if the given assignment satisfies all clauses in the problem.
-    pub fn verify_solution(&self, solution: &[bool]) -> Result<(), String> {
-        debug_assert_eq!(
-            solution.len(),
-            self.num_vars,
-            "Assignment length does not match number of variables."
-        );
-
-        for (i, clause) in self.clauses.iter().enumerate() {
-            if !clause.is_satisfied_by(solution) {
-                return Err(format!("Clause {} is unsatisfied.", i));
-            }
-        }
-
-        Ok(())
-    }
-}
 
 pub struct DPLLSolver<'p> {
     problem: &'p Problem,
-    assignment: Vec<Option<bool>>,
-    /// History of variable assignments for backtracking
-    assign_history: Vec<VariableAssignment>,
-    // History of decision levels for backtracking. Stores indices into the 'assign_history'
-    // where each decision level starts. Required, because in each decision level, multiple
-    // forced variable assignments (unit propagations) may occur.
-    decision_history: Vec<usize>,
+    /// The current partial assignment for all variables.
+    assignment: PartialAssignment,
+    /// History of all variable assignments (decisions and unit propagations).
+    /// Used to quickly revert assignments during backtracking.
+    var_assignment_history: Vec<VariableAssignment>,
+    /// Stores the index within `assign_history` where the assignments for each new decision level begin.
+    /// `decision_level_starts[i]` is the index of the first assignment (the decision itself) at decision level $i$.
+    /// Required, because after each decision, multiple unit propagations may occur.
+    decision_level_starts: Vec<usize>,
+    /// The current depth in the search tree (number of branching decisions made).
+    /// Level 0 is the initial state before any decisions.
     decision_level: usize,
 }
 
@@ -73,80 +31,91 @@ impl<'p> DPLLSolver<'p> {
         let num_vars = problem.num_vars;
         DPLLSolver {
             problem,
-            assignment: vec![None; num_vars],
-            decision_history: vec![0],
-            assign_history: Vec::new(),
+            assignment: PartialAssignment::with_size(num_vars),
+            decision_level_starts: vec![0],
+            var_assignment_history: Vec::new(),
             decision_level: 0,
         }
     }
 
     pub fn solve(&mut self) -> Option<Vec<bool>> {
+        let mut next_falsified_lit = self.make_branching_decision();
+
         'backtrack: loop {
-            match self.propagate_units() {
+            match self.propagate_units(next_falsified_lit) {
                 PropagationResult::Satisfied => {
-                    return Some(solution_from_assignment(&self.assignment));
+                    return Some(self.assignment_to_solution());
                 }
                 PropagationResult::Unsatisfied => {
-                    if !self.backtrack() {
-                        return None; // Cannot backtrack further => UNSAT
+                    match self.backtrack() {
+                        None => {
+                            return None; // Cannot backtrack further => UNSAT
+                        }
+                        Some(falsified_lit) => {
+                            next_falsified_lit = falsified_lit;
+                        }
                     }
-                    continue 'backtrack; // After backtracking, try unit propagation again
+                    continue 'backtrack;
                 }
-                PropagationResult::Undecided => {} // Proceed to branching
+                PropagationResult::Undecided => {
+                    // No conflicts & not all clauses satisfied => some clauses are still undecided
+                    // Make the next branching decision
+                    next_falsified_lit = self.make_branching_decision();
+                }
             }
-
-            self.make_branching_decision();
         }
     }
 
-    /// Performs unit propagation on the current assignment.
-    fn propagate_units(&mut self) -> PropagationResult {
-        // Repeat until no unit clauses or conflicts are found
-        'unit_prop: loop {
-            let mut all_clauses_satisfied = true;
-            let mut unit_lit: Option<Lit> = None;
+    /// Performs unit propagation starting from the literal that was just falsified.
+    fn propagate_units(&mut self, falsified_lit: Lit) -> PropagationResult {
+        let mut falsified_lits: Vec<Lit> = vec![falsified_lit];
 
-            'find_unit: for clause in &self.problem.clauses {
+        // For each literal that was just falsified, check only the affected clauses.
+        while let Some(lit) = falsified_lits.pop() {
+            'clauses: for clause in self.problem.clauses_containing_lit(lit) {
                 match clause.eval_with(&self.assignment) {
-                    ClauseState::Satisfied => continue 'find_unit, // 1 clause satisfied => check next
-                    ClauseState::Undecided(_) => {
-                        all_clauses_satisfied = false;
-                        continue 'find_unit; // continue checking for conflicts and unit clauses
-                    }
-                    ClauseState::Unit(unit_literal) => {
-                        // Found a unit clause => forced to assign the unit literal
-                        all_clauses_satisfied = false;
-                        unit_lit = Some(unit_literal);
-                        break 'find_unit;
-                    }
+                    ClauseState::Satisfied => continue 'clauses, // 1 clause satisfied => check next
                     ClauseState::Unsatisfied => {
-                        return PropagationResult::Unsatisfied;
+                        return PropagationResult::Unsatisfied; // Conflict => backtrack
+                    }
+                    ClauseState::Undecided(_) => continue 'clauses, // continue checking for conflicts and unit clauses
+                    ClauseState::Unit(unit_literal) => {
+                        if let Some(val) = self.assignment[unit_literal.var_id()] {
+                            // Check if the variable is already assigned the opposite value
+                            if val != unit_literal.is_pos() {
+                                return PropagationResult::Unsatisfied; // Conflict => backtrack
+                            }
+                            // Variable already assigned correctly, no action needed
+                        } else {
+                            // Variable is unassigned. Assign the variable such that the unit literal is true.
+                            // => The unit clause will be satisfied.
+                            self.assign_variable(unit_literal.var_id(), unit_literal.is_pos());
+
+                            // Unit literal is now true => its negation is false
+                            falsified_lits.push(unit_literal.negated());
+                        }
                     }
                 }
             }
-
-            if all_clauses_satisfied {
-                return PropagationResult::Satisfied;
-            }
-
-            if let Some(lit) = unit_lit {
-                // Assign the unit literal to the value that satisfies the unit clause
-
-                self.assign_history.push(VariableAssignment {
-                    var_id: lit.var_id(),
-                    old_value: self.assignment[lit.var_id()],
-                });
-                self.assignment[lit.var_id()] = Some(lit.is_pos());
-
-                continue 'unit_prop;
-            } else {
-                return PropagationResult::Undecided; // No unit clauses or conflicts found
-            }
         }
+        // All propagations done without conflicts.
+
+        // Check if all clauses are satisfied
+        if self
+            .problem
+            .clauses
+            .iter()
+            .all(|clause| matches!(clause.eval_with(&self.assignment), ClauseState::Satisfied))
+        {
+            return PropagationResult::Satisfied;
+        }
+
+        // No conflicts & not all clauses satisfied => some clauses are still undecided
+        PropagationResult::Undecided
     }
 
     /// Makes a branching decision by selecting an unassigned variable and assigning it to true.
-    fn make_branching_decision(&mut self) {
+    fn make_branching_decision(&mut self) -> Lit {
         // Find first unassigned variable
         let decision_var_id = self
             .assignment
@@ -157,82 +126,94 @@ impl<'p> DPLLSolver<'p> {
             .expect("BUG: Should always find an unassigned variable when PropagationResult is Undecided.");
 
         self.decision_level += 1;
-        self.decision_history.push(self.assign_history.len());
+        self.decision_level_starts
+            .push(self.var_assignment_history.len());
 
-        self.assign_history.push(VariableAssignment {
-            var_id: decision_var_id,
-            old_value: self.assignment[decision_var_id],
-        });
-        self.assignment[decision_var_id] = Some(true); // First try assigning 'true'
+        self.assign_variable(decision_var_id, true);
+        // Return the negated literal of the assigned decision variable
+        return Lit::new(decision_var_id, true).negated(); // TODO: Return ID instead of Lit
     }
 
-    /// Backtracks until a previous decision can be flipped.
-    /// Returns true if backtracking and flipping was successful, otherwise UNSAT.
-    fn backtrack(&mut self) -> bool {
-        if self.decision_level == 0 {
-            // Cannot backtrack further => UNSAT
-            return false;
-        }
-
-        self.reset_current_decision_level(self.decision_level);
-        self.decision_level -= 1;
-
-        loop {
-            if self.try_flip_previous_decision() {
-                return true;
-            }
-            // Flip failed, backtrack further
-
+    /// Backtracks to the last level where the decision can be flipped (from true to false).
+    /// Returns the **falsified literal** corresponding to the new decision, which initiates the
+    /// next round of unit propagation. Returns `None` if the problem is UNSAT.
+    fn backtrack(&mut self) -> Option<Lit> {
+        'backtrack: loop {
             if self.decision_level == 0 {
-                return false; // Cannot backtrack further => UNSAT
+                return None; // Cannot backtrack further => UNSAT
             }
 
-            // Backtrack one more level
-            self.reset_current_decision_level(self.decision_level);
-            self.decision_level -= 1;
-        }
-    }
+            // Revert all variable assignments made by unit propagation (UP) *after* the given decision (D).
+            // Do not revert the decision itself, so we try to flip it later.
+            self.undo_assignments_after(self.decision_level_starts[self.decision_level]);
 
-    fn reset_current_decision_level(&mut self, decision_level: usize) {
-        let start_of_current_level = self.decision_history[decision_level];
+            // Now, the branching decision is the last element in the variable assignment history.
+            // Attempt to flip the decision.
+            // Decision order: true -> false -> backtrack further
+            if let Some(prev_decision) = self.var_assignment_history.last_mut() {
+                if self.assignment[prev_decision.var_id] == Some(false) {
+                    // Decision exhausted: Both true and false have been tried => conflict.
+                    // Revert the decision and backtrack further
+                    // Example history: [..., D 4=T] -> [...]
+                    self.assignment[prev_decision.var_id] = prev_decision.old_value;
+                    self.var_assignment_history.pop();
+                    self.decision_level_starts.pop();
+                    self.decision_level -= 1;
+                    continue 'backtrack;
+                } else {
+                    // Flip decision: Currently true -> try to assign the variable to false.
+                    // We reuse the assignment history entry, so no need to modify it.
+                    self.assignment[prev_decision.var_id] = Some(false);
+                    self.decision_level_starts.pop(); // We exhausted all decision options at this level.
+                    self.decision_level -= 1;
 
-        // Revert all assignments made in the current decision level
-        while self.assign_history.len() > start_of_current_level {
-            if let Some(assignment_to_revert) = self.assign_history.pop() {
-                self.assignment[assignment_to_revert.var_id] = assignment_to_revert.old_value;
-            }
-        }
-
-        self.decision_history.pop();
-    }
-
-    fn try_flip_previous_decision(&mut self) -> bool {
-        // Attempt to flip the previous decision variable.
-        // Decision order: true -> false -> backtrack further
-        if let Some(prev_decision) = self.assign_history.last_mut() {
-            if self.assignment[prev_decision.var_id] == Some(false) {
-                // Decision was already 'false'. Revert and backtrack further.
-                self.assignment[prev_decision.var_id] = prev_decision.old_value;
-                self.assign_history.pop();
-                return false; // Flip failed
+                    // The variable 'V' is now false => The literal 'V' is falsified and initiates the next round of unit propagation.
+                    return Some(Lit::new(prev_decision.var_id, true));
+                }
             } else {
-                // Already tried 'true'. Now try 'false'.
-                self.assignment[prev_decision.var_id] = Some(false);
-                return true; // Flip successful
+                panic!("BUG: Decision history index mismatch in backtrack."); // decision_level > 0 => should not happen
             }
         }
-        false // No previous decision to flip
+    }
+
+    /// Undoes all variable assignments made after the given index in the assignment history.
+    /// The assignment at and before the boundary index is retained.
+    /// Example history: [..., D 4=T, UP 5=F, UP 6=T] with boundary_idx pointing to 'D 4=T'
+    ///               => [..., D 4=T]
+    fn undo_assignments_after(&mut self, boundary_idx: usize) {
+        while self.var_assignment_history.len() > boundary_idx + 1 {
+            if let Some(to_revert) = self.var_assignment_history.pop() {
+                self.assignment[to_revert.var_id] = to_revert.old_value; // Restore previous assignment
+            }
+        }
+    }
+
+    /// Assigns a variable and records the assignment for backtracking.
+    fn assign_variable(&mut self, var_id: usize, value: bool) {
+        self.var_assignment_history.push(VariableAssignment {
+            var_id,
+            old_value: self.assignment[var_id],
+        });
+        self.assignment[var_id] = Some(value);
+    }
+
+    fn assignment_to_solution(&self) -> Vec<bool> {
+        self.assignment
+            .iter()
+            .map(|&val| val.unwrap_or(false))
+            .collect()
     }
 }
+
+// ---------------------
+// --- Utility types ---
+// ---------------------
 
 enum PropagationResult {
     Satisfied,
     Unsatisfied,
     Undecided,
 }
-
-/// Identifier for a clause that is unique within a Problem.
-type ClauseID = usize;
 
 #[derive(Debug)]
 struct VariableAssignment {
@@ -242,6 +223,27 @@ struct VariableAssignment {
     old_value: Option<bool>,
 }
 
-fn solution_from_assignment(assignment: &[Option<bool>]) -> Vec<bool> {
-    assignment.iter().map(|&val| val.unwrap_or(false)).collect()
+/// Represents a partial assignment of boolean variables.
+/// Each variable can be assigned `Some(true)`, `Some(false)`, or `None` (unassigned).
+#[derive(Debug, Clone)]
+struct PartialAssignment(Vec<Option<bool>>);
+
+impl PartialAssignment {
+    fn with_size(size: usize) -> Self {
+        PartialAssignment(vec![None; size])
+    }
+}
+
+impl Deref for PartialAssignment {
+    type Target = Vec<Option<bool>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for PartialAssignment {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }

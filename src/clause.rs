@@ -153,6 +153,10 @@ impl Lit {
         Lit(self.0 ^ 1)
     }
 
+    pub fn negated_var_id(var_id: usize) -> usize {
+        (var_id << 1) | 1
+    }
+
     /// Evaluates the literal given a boolean value for its variable.
     ///
     /// E.g. assigning the variable `x=true` makes the literal `x` evaluate to `true` and `¬x` evaluate to `false`.
