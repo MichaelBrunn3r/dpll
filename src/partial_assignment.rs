@@ -1,5 +1,5 @@
 use crate::{clause::Lit, clause::VariableId};
-use std::ops::Index;
+use std::ops::{Deref, Index};
 
 /// Manages the partial assignment of variables during the DPLL solving process.
 /// Supports decisions, unit propagations, and decision backtracking.
@@ -123,7 +123,11 @@ impl PartialAssignment {
     /// Converts the partial assignment to a full solution.
     /// Unassigned variables default to `false`.
     pub fn to_solution(&self) -> Vec<bool> {
-        self.current_state
+        Self::assignment_to_solution(&self.current_state)
+    }
+
+    pub fn assignment_to_solution(assignment: &[Option<bool>]) -> Vec<bool> {
+        assignment
             .iter()
             .map(|&val| val.unwrap_or(false)) // Default unassigned variables to false
             .collect()
@@ -135,5 +139,13 @@ impl Index<usize> for PartialAssignment {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.current_state[index]
+    }
+}
+
+impl Deref for PartialAssignment {
+    type Target = [Option<bool>];
+
+    fn deref(&self) -> &Self::Target {
+        &self.current_state
     }
 }

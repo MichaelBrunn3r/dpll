@@ -70,7 +70,7 @@ impl<'p> DPLLSolver<'p> {
         // For each literal that was just falsified, check only the affected clauses.
         while let Some(lit) = self.falsified_lits_buffer.pop() {
             'clauses: for clause in self.problem.clauses_containing_lit(lit) {
-                match clause.eval_with(&self.assignment) {
+                match clause.eval_with_partial(&self.assignment) {
                     ClauseState::Satisfied => continue 'clauses, // 1 clause satisfied => check next
                     ClauseState::Unsatisfied => {
                         return PropagationResult::Unsatisfied; // Conflict => backtrack
@@ -127,7 +127,7 @@ impl<'p> DPLLSolver<'p> {
         self.problem
             .clauses
             .iter()
-            .all(|c| matches!(c.eval_with(&self.assignment), ClauseState::Satisfied))
+            .all(|c| c.is_satisfied_by_partial(&self.assignment))
     }
 
     // --- Heuristics ---
@@ -161,7 +161,7 @@ impl<'p> DPLLSolver<'p> {
                     .clauses_containing_var(var)
                     .filter(|c| {
                         matches!(
-                            c.eval_with(&self.assignment),
+                            c.eval_with_partial(&self.assignment),
                             ClauseState::Unit(_) | ClauseState::Undecided(_)
                         )
                     })

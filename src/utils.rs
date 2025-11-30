@@ -12,3 +12,16 @@ pub fn human_duration(duration: Duration) -> String {
         format!("{:.1}s", total_secs)
     }
 }
+
+/// Converts a code block into a generator.
+/// A generator is a function that can yield values, paused and be resumed.
+/// It behaves very similarly to an iterator.
+#[macro_export]
+macro_rules! generator {
+    ($code:expr) => {
+        std::iter::from_coroutine(
+            #[coroutine]
+            $code,
+        )
+    };
+}

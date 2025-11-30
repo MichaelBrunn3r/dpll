@@ -1,7 +1,10 @@
+#![feature(iter_from_coroutine)]
+#![feature(coroutines)]
+#![feature(yield_expr)]
+
 use crate::{dpll::DPLLSolver, problem::Problem};
 use itertools::Itertools;
 use std::{
-    collections::VecDeque,
     sync::{
         Arc,
         atomic::{self, AtomicBool},
@@ -93,10 +96,9 @@ impl SolverPool {
 
         let depth = Self::calculate_depth(self.num_workers, problem.num_vars);
         let split_vars = Self::select_split_vars(&problem, depth);
-        let initial_assignments = generate_initial_assignments(problem.num_vars, &split_vars);
-        let num_jobs = initial_assignments.len();
 
-        for assignment in initial_assignments {
+        let mut active_jobs = 0;
+        for assignment in Self::generate_assignments(&problem, split_vars, &solution_found) {
             let job = Job {
                 problem: Arc::clone(&problem),
                 assignment,
@@ -107,9 +109,15 @@ impl SolverPool {
             if job_sender.send(job).is_err() {
                 return None; // Failed to send job
             }
+
+            active_jobs += 1;
         }
 
         drop(tx);
+
+        if active_jobs == 0 {
+            return None; // No valid jobs were generated, i.e. problem is unsatisfiable
+        }
 
         let mut completed_jobs = 0;
         while let Ok(result) = rx.recv() {
@@ -117,7 +125,7 @@ impl SolverPool {
                 JobResult::Found(solution) => return Some(solution),
                 JobResult::Done => {
                     completed_jobs += 1;
-                    if completed_jobs == num_jobs {
+                    if completed_jobs == active_jobs {
                         return None; // All jobs completed, no solution found
                     }
                 }
@@ -144,27 +152,49 @@ impl SolverPool {
         // Take the variables with the highest scores
         sorted_vars.take(depth).map(|(var, _)| var).collect()
     }
-}
 
-pub fn generate_initial_assignments(
-    num_vars: usize,
-    split_vars: &[usize],
-) -> VecDeque<Vec<Option<bool>>> {
-    let depth = split_vars.len();
-    let mut initial_assignments: VecDeque<Vec<Option<bool>>> = VecDeque::new();
+    /// Generates all possible assignments for the given split variables,
+    /// skipping those that lead to immediate unsatisfied clauses.
+    fn generate_assignments<'p>(
+        problem: &'p Problem,
+        split_vars: Vec<usize>,
+        solution_found: &'p AtomicBool,
+    ) -> impl Iterator<Item = Vec<Option<bool>>> + 'p {
+        let clauses_containing_split_vars = split_vars
+            .iter()
+            .flat_map(|&var| problem.clauses_containing_var(var))
+            .unique_by(|c| *c as *const _)
+            .collect::<Vec<_>>();
 
-    let mut assignment = 0usize;
-    for _ in 0..(1 << depth) {
-        let mut assignment_vec = vec![None; num_vars];
-        for i in 0..depth {
-            let val = (assignment & (1 << i)) != 0;
-            assignment_vec[split_vars[i]] = Some(val);
-        }
-        initial_assignments.push_back(assignment_vec);
-        assignment += 1;
+        let num_vars = problem.num_vars;
+        let total_combinations = 1usize << split_vars.len();
+
+        generator!(move || {
+            let assignment_template = vec![None; num_vars];
+            for i in 0..total_combinations {
+                // Check if a solution has been found since we started generating
+                if solution_found.load(atomic::Ordering::Relaxed) {
+                    return; // Stop generating!
+                }
+
+                let mut assignment = assignment_template.clone();
+                for (bit_idx, &var) in split_vars.iter().enumerate() {
+                    let val = (i & (1 << bit_idx)) != 0;
+                    assignment[var] = Some(val);
+                }
+
+                // Check if any clause containing split vars is unsatisfied
+                if clauses_containing_split_vars
+                    .iter()
+                    .any(|clause| clause.is_unsatisfied_by_partial(&assignment))
+                {
+                    continue; // Skip this assignment as it leads to unsatisfied clauses
+                }
+
+                yield assignment
+            }
+        })
     }
-
-    initial_assignments
 }
 
 enum JobResult {

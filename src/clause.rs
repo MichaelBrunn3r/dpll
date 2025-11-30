@@ -1,4 +1,3 @@
-use crate::partial_assignment::PartialAssignment;
 use std::ops::{Deref, DerefMut};
 
 /// A view of a clauses literals.
@@ -27,13 +26,29 @@ impl Clause {
         false
     }
 
+    /// Checks if the clause is unsatisfied by the given partial assignment.
+    pub fn is_unsatisfied_by_partial(&self, part_assignment: &[Option<bool>]) -> bool {
+        self.0.iter().all(|&lit| match part_assignment[lit.var()] {
+            Some(val) => !lit.eval_with(val),
+            None => false,
+        })
+    }
+
+    /// Checks if the clause is satisfied by the given partial assignment.
+    pub fn is_satisfied_by_partial(&self, part_assignment: &[Option<bool>]) -> bool {
+        self.0.iter().any(|&lit| match part_assignment[lit.var()] {
+            Some(val) => lit.eval_with(val),
+            None => false,
+        })
+    }
+
     /// Evaluates the clause under the given partial assignment.
-    pub fn eval_with(&self, assignment: &PartialAssignment) -> ClauseState {
+    pub fn eval_with_partial(&self, part_assignment: &[Option<bool>]) -> ClauseState {
         let mut unassigned_count = 0usize;
         let mut unit_lit = None;
 
         for &lit in &self.0 {
-            if let Some(val) = assignment[lit.var()] {
+            if let Some(val) = part_assignment[lit.var()] {
                 if lit.eval_with(val) {
                     return ClauseState::Satisfied;
                 }
