@@ -32,6 +32,8 @@ struct Args {
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
+    let total_start = Instant::now();
+
     let pool = SolverPool::new(args.num_worker_threads);
     println!(
         "Initialized pool with {} worker thread(s).",
@@ -70,6 +72,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     stats.print_summary();
+
+    let total_elapsed = total_start.elapsed();
+    println!("\nTotal runtime: {}", human_duration(total_elapsed));
     Ok(())
 }
 
@@ -199,7 +204,6 @@ impl Stats {
 
         self.print_times_table("Parsing times:", &self.parse_durations);
         self.print_times_table("Solving times:", &self.solve_durations);
-        self.print_times_table("Total times:", &self.durations);
     }
 
     fn print_times_table(&self, title: &str, durations: &Vec<Duration>) {
