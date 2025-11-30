@@ -3,6 +3,8 @@ use crate::clause::{Clause, Lit};
 pub struct Problem {
     pub num_vars: usize,
     pub clauses: Vec<Clause>,
+    /// Maps each variable to the list of clauses it appears in.
+    pub var2clauses: Vec<Vec<ClauseID>>,
     /// Maps each literal to the list of clauses it appears in.
     pub lit2clauses: Vec<Vec<ClauseID>>,
 }
@@ -12,6 +14,7 @@ impl Problem {
         Problem {
             num_vars,
             clauses: Vec::with_capacity(num_clauses),
+            var2clauses: vec![Vec::new(); num_vars],
             lit2clauses: vec![Vec::new(); num_vars * 2], // Each variable can be positive or negated
         }
     }
@@ -29,6 +32,7 @@ impl Problem {
         let clause_id = self.clauses.len();
         for lit in &clause.0 {
             self.lit2clauses[lit.0 as usize].push(clause_id);
+            self.var2clauses[lit.var_id()].push(clause_id);
         }
 
         self.clauses.push(clause.clone());
@@ -54,6 +58,11 @@ impl Problem {
     // return iterator over clauses containing the given literal
     pub fn clauses_containing_lit(&self, lit: Lit) -> impl Iterator<Item = &Clause> {
         let clause_ids = &self.lit2clauses[lit.0 as usize];
+        clause_ids.iter().map(|&id| &self.clauses[id])
+    }
+
+    pub fn clauses_containing_var(&self, var_id: usize) -> impl Iterator<Item = &Clause> {
+        let clause_ids = &self.var2clauses[var_id];
         clause_ids.iter().map(|&id| &self.clauses[id])
     }
 }

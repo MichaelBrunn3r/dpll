@@ -116,14 +116,9 @@ impl<'p> DPLLSolver<'p> {
 
     /// Makes a branching decision by selecting an unassigned variable and assigning it to true.
     fn make_branching_decision(&mut self) -> Lit {
-        // Find first unassigned variable
-        let decision_var_id = self
-            .assignment
-            .iter()
-            .enumerate()
-            .find(|(_, val)| val.is_none())
-            .map(|(id, _)| id)
-            .expect("BUG: Should always find an unassigned variable when PropagationResult is Undecided.");
+        let decision_var_id = self.find_most_frequent_var_in_undecided_clauses().expect(
+            "BUG: Should always find an unassigned variable when PropagationResult is Undecided.",
+        );
 
         self.decision_level += 1;
         self.decision_level_starts
@@ -202,6 +197,40 @@ impl<'p> DPLLSolver<'p> {
             .iter()
             .map(|&val| val.unwrap_or(false))
             .collect()
+    }
+
+    // ---
+    // Heuristics
+    // ---
+
+    fn find_most_frequent_var_in_undecided_clauses(&self) -> Option<usize> {
+        let mut max_count = 0;
+        let mut most_freq_var = None;
+
+        for var_id in 0..self.problem.num_vars {
+            if self.assignment[var_id].is_none() {
+                let count = self.count_var_occurrences_in_undecided_clauses(var_id);
+                if count > max_count {
+                    max_count = count;
+                    most_freq_var = Some(var_id);
+                }
+            }
+        }
+
+        most_freq_var
+    }
+
+    fn count_var_occurrences_in_undecided_clauses(&self, var_id: usize) -> usize {
+        let mut count = 0;
+        for clause in self.problem.clauses_containing_var(var_id) {
+            match clause.eval_with(&self.assignment) {
+                ClauseState::Unit(_) | ClauseState::Undecided(_) => {
+                    count += 1;
+                }
+                _ => {}
+            }
+        }
+        count
     }
 }
 
