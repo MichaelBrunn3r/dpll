@@ -226,7 +226,7 @@ struct VariableAssignment {
 /// Represents a partial assignment of boolean variables.
 /// Each variable can be assigned `Some(true)`, `Some(false)`, or `None` (unassigned).
 #[derive(Debug, Clone)]
-struct PartialAssignment(Vec<Option<bool>>);
+pub struct PartialAssignment(Vec<Option<bool>>);
 
 impl PartialAssignment {
     fn with_size(size: usize) -> Self {

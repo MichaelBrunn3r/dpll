@@ -1,3 +1,7 @@
+use std::ops::{Deref, DerefMut};
+
+use crate::PartialAssignment;
+
 /// A view of a clauses literals.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Clause(pub Vec<Lit>);
@@ -16,7 +20,7 @@ impl Clause {
 
     /// Checks if the clause conflicts with the given partial assignment.
     /// A conflict occurs if all literals in the clause evaluate to false.
-    pub fn conflicts_with(&self, assignment: &[Option<bool>]) -> bool {
+    pub fn conflicts_with(&self, assignment: &PartialAssignment) -> bool {
         for &lit in &self.0 {
             match assignment[lit.var_id()] {
                 None => return false, // Not a conflict yet
@@ -36,7 +40,7 @@ impl Clause {
     }
 
     /// For a given partial assignment, finds a unit literal in the clause if it exists.
-    pub fn find_unit_literal(&self, assignment: &[Option<bool>]) -> Option<Lit> {
+    pub fn find_unit_literal(&self, assignment: &PartialAssignment) -> Option<Lit> {
         let mut unassigned_count = 0usize;
         let mut unit_lit = None;
 
@@ -77,7 +81,7 @@ impl Clause {
     }
 
     /// Evaluates the clause under the given partial assignment.
-    pub fn eval_with(&self, assignment: &[Option<bool>]) -> ClauseState {
+    pub fn eval_with(&self, assignment: &PartialAssignment) -> ClauseState {
         let mut unassigned_count = 0usize;
         let mut unit_lit = None;
 
@@ -100,9 +104,16 @@ impl Clause {
     }
 }
 
-impl std::iter::FromIterator<Lit> for Clause {
-    fn from_iter<I: IntoIterator<Item = Lit>>(iter: I) -> Self {
-        Clause(iter.into_iter().collect())
+impl Deref for Clause {
+    type Target = Vec<Lit>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Clause {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -223,9 +234,9 @@ mod tests {
         ];
 
         for (clause_ints, expected) in cases {
-            let mut clause: Clause = clause_ints.iter().map(|&x| Lit::from(x)).collect();
-            clause.0.sort_unstable();
-            clause.0.dedup();
+            let mut clause: Clause = Clause(clause_ints.iter().map(|&x| Lit::from(x)).collect());
+            clause.sort_unstable();
+            clause.dedup();
 
             assert_eq!(
                 clause.is_tautology(),
