@@ -26,17 +26,17 @@ struct Args {
     verify: bool,
     /// Number of worker threads to use (number or 'auto')
     #[arg(short = 'w', long = "worker-threads", value_name = "N", default_value = "1", value_parser = cli::parse_num_worker_threads)]
-    worker_threads: cli::NumWorkerThreads,
+    num_worker_threads: usize,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
-    let num_workers = match args.worker_threads {
-        cli::NumWorkerThreads::Num(n) => n,
-    };
-    let pool = SolverPool::new(num_workers);
-    println!("Initialized pool with {} worker thread(s).", num_workers);
+    let pool = SolverPool::new(args.num_worker_threads);
+    println!(
+        "Initialized pool with {} worker thread(s).",
+        pool.num_workers
+    );
 
     let path = args.path;
     let mut stats = &mut Stats::new();

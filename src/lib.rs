@@ -1,14 +1,13 @@
+use crate::{dpll::DPLLSolver, problem::Problem};
 use std::{
     collections::VecDeque,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{self, AtomicBool},
         mpsc,
     },
-    thread,
+    thread::{self, available_parallelism},
 };
-
-use crate::{dpll::DPLLSolver, problem::Problem};
 
 pub mod clause;
 pub mod dpll;
@@ -18,8 +17,9 @@ pub mod problem;
 pub mod utils;
 
 pub struct SolverPool {
-    job_sender: Option<mpsc::Sender<Job>>,
+    job_sender: Option<crossbeam_channel::Sender<Job>>,
     _workers: Vec<thread::JoinHandle<()>>,
+    pub num_workers: usize,
 }
 
 impl SolverPool {
@@ -28,18 +28,20 @@ impl SolverPool {
             return Self {
                 job_sender: None,
                 _workers: Vec::new(),
+                num_workers: 1,
             };
         }
+        // Limit number of workers to available parallelism
+        let num_workers = num_workers.min(available_parallelism().map(|n| n.get()).unwrap_or(1));
 
-        let (tx, rx) = mpsc::channel::<Job>();
-        let rx = Arc::new(Mutex::new(rx));
+        let (tx, rx) = crossbeam_channel::unbounded::<Job>();
         let mut workers = Vec::with_capacity(num_workers);
 
         for _ in 0..num_workers {
             let rx = rx.clone();
             workers.push(thread::spawn(move || {
                 loop {
-                    let job = match rx.lock().unwrap().recv() {
+                    let job = match rx.recv() {
                         Ok(job) => job,
                         _ => break, // Channel closed, stop the worker
                     };
@@ -71,6 +73,7 @@ impl SolverPool {
         Self {
             job_sender: Some(tx),
             _workers: workers,
+            num_workers,
         }
     }
 
@@ -87,9 +90,16 @@ impl SolverPool {
         let solution_found = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
 
-        let initial_assignments =
-            generate_initial_assignments(problem.num_vars, 3.min(problem.num_vars));
+        let initial_assignments = generate_initial_assignments(
+            problem.num_vars,
+            Self::calculate_depth(self.num_workers, problem.num_vars).min(problem.num_vars),
+        );
         let num_jobs = initial_assignments.len();
+        debug_assert!(
+            num_jobs >= self.num_workers,
+            "Number of jobs should be at least number of workers"
+        );
+
         for assignment in initial_assignments {
             let job = Job {
                 problem: Arc::clone(&problem),
@@ -119,6 +129,11 @@ impl SolverPool {
         }
 
         None
+    }
+
+    /// Calculate depth required to generate at least `num_workers` initial assignments.
+    pub fn calculate_depth(num_workers: usize, num_vars: usize) -> usize {
+        ((num_workers as f64).log2().ceil() as usize).min(num_vars)
     }
 }
 
