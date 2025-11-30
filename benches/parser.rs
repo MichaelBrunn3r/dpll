@@ -19,10 +19,14 @@ fn bench_solve(c: &mut Criterion) {
     let problem = dpll::parser::parse_dimacs_cnf(&data).expect("failed to parse fixture");
     assert_eq!(problem.num_vars, 20);
     assert_eq!(problem.clauses.len(), 91);
+    let mut assignment_buffer = vec![None; problem.num_vars];
 
     c.bench_function("solve", |b| {
         b.iter(|| {
-            let _ = DPLLSolver::new(black_box(&problem)).solve(&AtomicBool::new(false));
+            assignment_buffer.fill(None);
+            let mut solver =
+                DPLLSolver::with_assignment(black_box(&problem), &mut assignment_buffer);
+            let _ = solver.solve(&AtomicBool::new(false));
         })
     });
 }

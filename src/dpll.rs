@@ -6,24 +6,18 @@ use crate::{
     problem::Problem,
 };
 
-pub struct DPLLSolver<'p> {
-    problem: &'p Problem,
-    assignment: PartialAssignment,
+pub struct DPLLSolver<'a> {
+    problem: &'a Problem,
+    assignment: PartialAssignment<'a>,
     /// Reusable buffer to store literals that become falsified during unit propagation.
     falsified_lits_buffer: Vec<Lit>,
 }
 
-impl<'p> DPLLSolver<'p> {
-    pub fn new(problem: &'p Problem) -> Self {
-        let num_vars = problem.num_vars;
-        DPLLSolver {
-            problem,
-            assignment: PartialAssignment::new(num_vars),
-            falsified_lits_buffer: Vec::new(),
-        }
-    }
-
-    pub fn with_assignment(problem: &'p Problem, initial_assignment: Vec<Option<bool>>) -> Self {
+impl<'a> DPLLSolver<'a> {
+    pub fn with_assignment(
+        problem: &'a Problem,
+        initial_assignment: &'a mut [Option<bool>],
+    ) -> Self {
         debug_assert!(
             initial_assignment.len() == problem.num_vars,
             "Initial assignment length must match number of variables."

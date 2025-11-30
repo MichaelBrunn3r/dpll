@@ -11,6 +11,7 @@ use std::{
         mpsc,
     },
     thread::{self, available_parallelism},
+    vec,
 };
 
 pub mod clause;
@@ -44,18 +45,24 @@ impl SolverPool {
         for _ in 0..num_workers {
             let rx = rx.clone();
             workers.push(thread::spawn(move || {
-                loop {
-                    let job = match rx.recv() {
-                        Ok(job) => job,
-                        _ => break, // Channel closed, stop the worker
-                    };
-
-                    let mut assignment = vec![None; job.problem.num_vars];
-                    for (var, val) in &job.decision {
-                        assignment[*var] = Some(*val);
+                let mut assignment_buffer = Vec::new();
+                while let Ok(job) = rx.recv() {
+                    // Ensure buffer capacity
+                    if assignment_buffer.len() < job.problem.num_vars {
+                        assignment_buffer.resize(job.problem.num_vars, None);
                     }
 
-                    let mut solver = DPLLSolver::with_assignment(&job.problem, assignment);
+                    // Reconstruct partial assignment from combination
+                    assignment_buffer[0..job.problem.num_vars].fill(None);
+                    for (bit_idx, &var_idx) in job.split_vars.iter().enumerate() {
+                        let val = (job.combination & (1 << bit_idx)) != 0;
+                        assignment_buffer[var_idx] = Some(val);
+                    }
+
+                    let mut solver = DPLLSolver::with_assignment(
+                        &job.problem,
+                        &mut assignment_buffer[..job.problem.num_vars],
+                    );
                     match solver.solve(&job.solution_found_flag) {
                         Some(solution) => {
                             // Signal other workers to stop working on this job
@@ -85,7 +92,8 @@ impl SolverPool {
             Some(tx) => tx,
             None => {
                 // Single-threaded mode
-                let mut solver = DPLLSolver::new(&problem);
+                let mut assignment_buffer = vec![None; problem.num_vars];
+                let mut solver = DPLLSolver::with_assignment(&problem, &mut assignment_buffer);
                 return solver.solve(&AtomicBool::new(false));
             }
         };
@@ -94,15 +102,16 @@ impl SolverPool {
         let (tx, rx) = mpsc::channel();
 
         let depth = Self::calculate_depth(self.num_workers, problem.num_vars);
-        let split_vars = Self::select_split_vars(&problem, depth);
+        let split_vars = Arc::new(Self::select_split_vars(&problem, depth));
 
         let mut active_jobs = 0;
-        for decision in Self::generate_decision(&problem, split_vars, &solution_found) {
+        for combination in Self::generate_combinations(&problem, &split_vars, &solution_found) {
             let job = Job {
                 problem: Arc::clone(&problem),
                 solution_found_flag: Arc::clone(&solution_found),
                 sender: tx.clone(),
-                decision,
+                split_vars: split_vars.clone(),
+                combination,
             };
 
             if job_sender.send(job).is_err() {
@@ -154,11 +163,11 @@ impl SolverPool {
 
     /// Generates all possible assignments for the given split variables,
     /// skipping those that lead to immediate unsatisfied clauses.
-    fn generate_decision<'p>(
+    fn generate_combinations<'p>(
         problem: &'p Problem,
-        split_vars: Vec<usize>,
+        split_vars: &'p Vec<usize>,
         solution_found: &'p AtomicBool,
-    ) -> impl Iterator<Item = Vec<(usize, bool)>> + 'p {
+    ) -> impl Iterator<Item = usize> + 'p {
         let clauses_containing_split_vars = split_vars
             .iter()
             .flat_map(|&var| problem.clauses_containing_var(var))
@@ -166,18 +175,18 @@ impl SolverPool {
             .collect::<Vec<_>>();
 
         let num_vars = problem.num_vars;
-        let total_combinations = 1usize << split_vars.len();
+        let combinations = 1usize << split_vars.len();
 
         generator!(move || {
             let mut assignment = vec![None; num_vars];
-            for i in 0..total_combinations {
+            for combination in 0..combinations {
                 // Check if a solution has been found since we started generating
                 if solution_found.load(atomic::Ordering::Relaxed) {
                     return; // Stop generating!
                 }
 
                 for (bit_idx, &var) in split_vars.iter().enumerate() {
-                    let val = (i & (1 << bit_idx)) != 0;
+                    let val = (combination & (1 << bit_idx)) != 0;
                     assignment[var] = Some(val);
                 }
 
@@ -189,13 +198,7 @@ impl SolverPool {
                     continue; // Skip this assignment as it leads to unsatisfied clauses
                 }
 
-                let decision = assignment
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(var, &val)| val.map(|v| (var, v)))
-                    .collect::<Vec<_>>();
-
-                yield decision
+                yield combination
             }
         })
     }
@@ -213,5 +216,6 @@ struct Job {
     problem: Arc<Problem>,
     solution_found_flag: Arc<AtomicBool>,
     sender: mpsc::Sender<JobResult>,
-    decision: Vec<(usize, bool)>,
+    split_vars: Arc<Vec<usize>>,
+    combination: usize,
 }

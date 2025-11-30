@@ -3,10 +3,10 @@ use std::ops::{Deref, Index};
 
 /// Manages the partial assignment of variables during the DPLL solving process.
 /// Supports decisions, unit propagations, and decision backtracking.
-pub struct PartialAssignment {
+pub struct PartialAssignment<'a> {
     /// The current partial assignment for all variables.
     /// None=unassigned, Some(bool)=assigned to true/false.
-    current_state: Vec<Option<bool>>,
+    current_state: &'a mut [Option<bool>],
 
     /// A chronological stack of all variable assignments (decisions & unit propagations).
     /// Used to undo assignments during backtracking.
@@ -17,19 +17,10 @@ pub struct PartialAssignment {
     decision_marks: Vec<usize>,
 }
 
-impl PartialAssignment {
-    /// Creates a new Assignment state with no variables assigned.
-    pub fn new(num_vars: usize) -> Self {
-        PartialAssignment {
-            current_state: vec![None; num_vars],
-            history: Vec::with_capacity(num_vars),
-            decision_marks: Vec::new(), // Level 0 is implicit
-        }
-    }
-
+impl<'a> PartialAssignment<'a> {
     /// Creates a new Assignment state with the given initial assignment.
     /// The initial assignment will be treated as level 0 (no decisions made yet).
-    pub fn with_assignment(initial_assignment: Vec<Option<bool>>) -> Self {
+    pub fn with_assignment(initial_assignment: &'a mut [Option<bool>]) -> Self {
         PartialAssignment {
             current_state: initial_assignment,
             history: Vec::new(),
@@ -134,7 +125,7 @@ impl PartialAssignment {
     }
 }
 
-impl Index<usize> for PartialAssignment {
+impl<'a> Index<usize> for PartialAssignment<'a> {
     type Output = Option<bool>;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -142,7 +133,7 @@ impl Index<usize> for PartialAssignment {
     }
 }
 
-impl Deref for PartialAssignment {
+impl<'a> Deref for PartialAssignment<'a> {
     type Target = [Option<bool>];
 
     fn deref(&self) -> &Self::Target {
