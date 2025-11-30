@@ -1,6 +1,6 @@
 use clap::Parser;
+use dpll::SolverPool;
 use dpll::parser::parse_dimacs_cnf;
-use dpll::solve_parallel;
 use dpll::utils::human_duration;
 use memmap2::Mmap;
 use std::sync::Arc;
@@ -32,9 +32,11 @@ struct Args {
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
-    let num_threads = match args.worker_threads {
+    let num_workers = match args.worker_threads {
         cli::NumWorkerThreads::Num(n) => n,
     };
+    let pool = SolverPool::new(num_workers);
+    println!("Initialized pool with {} worker threads.", num_workers);
 
     let path = args.path;
     let mut stats = &mut Stats::new();
@@ -53,7 +55,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         for entry in entries {
             println!();
-            match solve_file(&entry, args.verify, &mut stats, num_threads) {
+            match solve_file(&entry, args.verify, &mut stats, &pool) {
                 Err(e) => {
                     stats.errors += 1;
                     eprintln!("Error solving {:?}: {}", entry, e);
@@ -62,7 +64,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     } else if path.is_file() {
-        solve_file(&path, args.verify, stats, num_threads)?;
+        solve_file(&path, args.verify, stats, &pool)?;
     } else {
         return Err(format!("Path {:?} is not a file or directory", path).into());
     }
@@ -75,7 +77,7 @@ fn solve_file(
     path: &Path,
     verify: bool,
     stats: &mut Stats,
-    num_threads: usize,
+    pool: &SolverPool,
 ) -> Result<(), Box<dyn Error>> {
     println!("---\nProcessing file: {:?}\n---", &path);
     stats.processed += 1;
@@ -100,7 +102,7 @@ fn solve_file(
 
     let solve_start = Instant::now();
 
-    match solve_parallel(problem.clone(), num_threads) {
+    match pool.submit(problem.clone()) {
         Some(solution) => {
             stats.sat_count += 1;
             let solve_elapsed = solve_start.elapsed();
