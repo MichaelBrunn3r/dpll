@@ -27,6 +27,16 @@ impl PartialAssignment {
         }
     }
 
+    /// Creates a new Assignment state with the given initial assignment.
+    /// The initial assignment will be treated as level 0 (no decisions made yet).
+    pub fn with_assignment(initial_assignment: Vec<Option<bool>>) -> Self {
+        PartialAssignment {
+            current_state: initial_assignment,
+            history: Vec::new(),
+            decision_marks: Vec::new(),
+        }
+    }
+
     /// Returns the current decision level (depth of the search tree).
     pub fn decision_level(&self) -> usize {
         self.decision_marks.len()

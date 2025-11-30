@@ -1,185 +1,83 @@
-use crate::{
-    clause::{ClauseState, Lit, VariableId},
-    partial_assignment::PartialAssignment,
-    problem::Problem,
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc, Mutex,
+        atomic::{self, AtomicBool},
+        mpsc,
+    },
+    thread,
 };
 
+use crate::{dpll::DPLLSolver, problem::Problem};
+
 pub mod clause;
+pub mod dpll;
 pub mod parser;
 pub mod partial_assignment;
 pub mod problem;
 pub mod utils;
 
-pub struct DPLLSolver<'p> {
-    problem: &'p Problem,
-    assignment: PartialAssignment,
-    /// Pre-calculated Jeroslow-Wang for each variable.
-    var_scores: Vec<f64>,
-    /// Reusable buffer to store literals that become falsified during unit propagation.
-    falsified_lits_buffer: Vec<Lit>,
+pub fn solve_parallel(problem: Arc<Problem>, num_threads: usize) -> Option<Vec<bool>> {
+    if num_threads <= 1 {
+        return DPLLSolver::new(&problem).solve();
+    }
+
+    let job_queue = Arc::new(Mutex::new(generate_jobs(
+        problem.num_vars,
+        3.min(problem.num_vars),
+    )));
+    let solution_found = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+
+    let mut handles = Vec::new();
+    for _ in 0..num_threads {
+        let problem = Arc::clone(&problem);
+        let queue = Arc::clone(&job_queue);
+        let solution_flag = Arc::clone(&solution_found);
+        let sender = tx.clone();
+
+        handles.push(thread::spawn(move || {
+            loop {
+                if solution_flag.load(atomic::Ordering::SeqCst) {
+                    break; // Solution already found
+                }
+
+                let job = match { queue.lock().unwrap().pop_front() } {
+                    Some(job) => job,
+                    None => break, // No more jobs
+                };
+
+                let problem = Arc::clone(&problem);
+                let mut solver = DPLLSolver::with_assignment(&problem, job);
+                if let Some(solution) = solver.solve() {
+                    solution_flag.store(true, atomic::Ordering::SeqCst);
+                    let _ = sender.send(solution);
+                    break;
+                }
+            }
+        }));
+    }
+
+    drop(tx);
+    rx.recv().ok()
 }
 
-impl<'p> DPLLSolver<'p> {
-    pub fn new(problem: &'p Problem) -> Self {
-        let num_vars = problem.num_vars;
-        DPLLSolver {
-            problem,
-            assignment: PartialAssignment::new(num_vars),
-            var_scores: problem.calculate_jeroslow_wang_scores(),
-            falsified_lits_buffer: Vec::new(),
-        }
-    }
+pub fn generate_jobs(num_vars: usize, depth: usize) -> VecDeque<Vec<Option<bool>>> {
+    let mut initial_assignments: VecDeque<Vec<Option<bool>>> = VecDeque::new();
 
-    pub fn solve(&mut self) -> Option<Vec<bool>> {
-        let mut next_falsified_lit = self.make_branching_decision();
-
-        'backtrack: loop {
-            match self.propagate_units(next_falsified_lit) {
-                PropagationResult::Satisfied => {
-                    return Some(self.assignment.to_solution());
-                }
-                PropagationResult::Unsatisfied => {
-                    match self.assignment.backtrack() {
-                        None => {
-                            return None; // Cannot backtrack further => UNSAT
-                        }
-                        Some(falsified_lit) => {
-                            next_falsified_lit = falsified_lit;
-                        }
-                    }
-                    continue 'backtrack;
-                }
-                PropagationResult::Undecided => {
-                    // No conflicts & not all clauses satisfied => some clauses are still undecided
-                    // Make the next branching decision
-                    next_falsified_lit = self.make_branching_decision();
-                }
+    let mut assignment = 0usize;
+    for _ in 0..(1 << depth) {
+        let mut assignment_vec = vec![None; num_vars];
+        for i in 0..depth {
+            if (assignment & (1 << i)) != 0 {
+                assignment_vec[i] = Some(true);
+            } else {
+                assignment_vec[i] = Some(false);
             }
         }
+        initial_assignments.push_back(assignment_vec);
+        assignment += 1;
     }
 
-    /// Performs unit propagation starting from the literal that was just falsified.
-    fn propagate_units(&mut self, falsified_lit: Lit) -> PropagationResult {
-        self.falsified_lits_buffer.clear();
-        self.falsified_lits_buffer.push(falsified_lit);
-
-        // For each literal that was just falsified, check only the affected clauses.
-        while let Some(lit) = self.falsified_lits_buffer.pop() {
-            'clauses: for clause in self.problem.clauses_containing_lit(lit) {
-                match clause.eval_with(&self.assignment) {
-                    ClauseState::Satisfied => continue 'clauses, // 1 clause satisfied => check next
-                    ClauseState::Unsatisfied => {
-                        return PropagationResult::Unsatisfied; // Conflict => backtrack
-                    }
-                    ClauseState::Undecided(_) => continue 'clauses, // continue checking for conflicts and unit clauses
-                    ClauseState::Unit(unit_literal) => {
-                        let var = unit_literal.var();
-                        if let Some(val) = self.assignment[var] {
-                            // Check if the variable is already assigned the opposite value
-                            if val != unit_literal.is_pos() {
-                                return PropagationResult::Unsatisfied; // Conflict => backtrack
-                            }
-                            // Variable already assigned correctly, no action needed
-                        } else {
-                            // Variable is unassigned. Assign the variable such that the unit literal is true.
-                            // => The unit clause will be satisfied.
-                            self.assignment.propagate(var, unit_literal.is_pos());
-
-                            // Unit literal is now true => its negation is false
-                            self.falsified_lits_buffer.push(unit_literal.negated());
-                        }
-                    }
-                }
-            }
-        }
-        // All propagations done without conflicts.
-
-        return if self.all_clauses_satisfied() {
-            PropagationResult::Satisfied
-        } else {
-            PropagationResult::Undecided
-        };
-    }
-
-    /// Makes a branching decision by selecting an unassigned variable and assigning it to true.
-    fn make_branching_decision(&mut self) -> Lit {
-        let decision_var = match self.find_var_with_highest_score() {
-            Some(v) => v,
-            None => {
-                debug_assert!(
-                    false,
-                    "PropagationResult::Undecided implies some unassigned variable exists."
-                );
-                unreachable!()
-            }
-        };
-
-        self.assignment.decide(decision_var);
-        // Return the negated literal of the assigned decision variable
-        return Lit::new(decision_var, true).negated();
-    }
-
-    fn all_clauses_satisfied(&self) -> bool {
-        self.problem
-            .clauses
-            .iter()
-            .all(|c| matches!(c.eval_with(&self.assignment), ClauseState::Satisfied))
-    }
-
-    // --- Heuristics ---
-
-    fn find_var_with_highest_score(&self) -> Option<usize> {
-        let mut max_score = f64::MIN;
-        let mut best_var = None;
-
-        for var in 0..self.problem.num_vars {
-            if self.assignment[var].is_none() {
-                let score = self.var_scores[var];
-                if score > max_score {
-                    max_score = score;
-                    best_var = Some(var);
-                }
-            }
-        }
-
-        best_var
-    }
-
-    #[allow(dead_code)]
-    fn find_most_frequent_var_in_undecided_clauses(&self) -> Option<usize> {
-        let mut max_count = 0;
-        let mut most_freq_var = None;
-
-        for var in 0..self.problem.num_vars {
-            if self.assignment[var].is_none() {
-                let count = self
-                    .problem
-                    .clauses_containing_var(var)
-                    .filter(|c| {
-                        matches!(
-                            c.eval_with(&self.assignment),
-                            ClauseState::Unit(_) | ClauseState::Undecided(_)
-                        )
-                    })
-                    .count();
-
-                if count > max_count {
-                    max_count = count;
-                    most_freq_var = Some(var);
-                }
-            }
-        }
-
-        most_freq_var
-    }
-}
-
-// ---------------------
-// --- Utility types ---
-// ---------------------
-
-enum PropagationResult {
-    Satisfied,
-    Unsatisfied,
-    Undecided,
+    initial_assignments
 }

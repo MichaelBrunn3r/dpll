@@ -1,5 +1,8 @@
 // Remove Clause from imports, as it's no longer a public struct we construct manually
-use crate::{Lit, Problem, clause::Clause};
+use crate::{
+    Problem,
+    clause::{Clause, Lit},
+};
 
 /// Parses a DIMACS CNF formatted byte array into a Problem instance.
 pub fn parse_dimacs_cnf(data: &[u8]) -> Result<Problem, String> {

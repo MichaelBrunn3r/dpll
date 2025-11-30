@@ -1,8 +1,9 @@
 use clap::Parser;
-use dpll::DPLLSolver;
 use dpll::parser::parse_dimacs_cnf;
+use dpll::solve_parallel;
 use dpll::utils::human_duration;
 use memmap2::Mmap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{
     error::Error,
@@ -11,8 +12,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Parser, Debug)]
-#[command(author, version, long_about = None)]
+pub mod cli;
+
+#[derive(Parser)]
 struct Args {
     #[arg(value_name = "PATH")]
     path: PathBuf,
@@ -22,10 +24,17 @@ struct Args {
     /// Verify the solution
     #[arg(long)]
     verify: bool,
+    /// Number of worker threads to use (number or 'auto')
+    #[arg(short = 'w', long = "worker-threads", value_name = "N", default_value = "1", value_parser = cli::parse_num_worker_threads)]
+    worker_threads: cli::NumWorkerThreads,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
+
+    let num_threads = match args.worker_threads {
+        cli::NumWorkerThreads::Num(n) => n,
+    };
 
     let path = args.path;
     let mut stats = &mut Stats::new();
@@ -44,7 +53,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         for entry in entries {
             println!();
-            match solve_file(&entry, args.verify, &mut stats) {
+            match solve_file(&entry, args.verify, &mut stats, num_threads) {
                 Err(e) => {
                     stats.errors += 1;
                     eprintln!("Error solving {:?}: {}", entry, e);
@@ -53,7 +62,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     } else if path.is_file() {
-        solve_file(&path, args.verify, stats)?;
+        solve_file(&path, args.verify, stats, num_threads)?;
     } else {
         return Err(format!("Path {:?} is not a file or directory", path).into());
     }
@@ -62,7 +71,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn solve_file(path: &Path, verify: bool, stats: &mut Stats) -> Result<(), Box<dyn Error>> {
+fn solve_file(
+    path: &Path,
+    verify: bool,
+    stats: &mut Stats,
+    num_threads: usize,
+) -> Result<(), Box<dyn Error>> {
     println!("---\nProcessing file: {:?}\n---", &path);
     stats.processed += 1;
     let start = Instant::now();
@@ -76,7 +90,7 @@ fn solve_file(path: &Path, verify: bool, stats: &mut Stats) -> Result<(), Box<dy
         let problem = parse_dimacs_cnf(&mmap)?;
         let parse_elapsed = parse_start.elapsed();
         stats.parse_durations.push(parse_elapsed);
-        problem
+        Arc::new(problem)
     };
     println!(
         "Problem: {} variables, {} clauses",
@@ -85,7 +99,8 @@ fn solve_file(path: &Path, verify: bool, stats: &mut Stats) -> Result<(), Box<dy
     );
 
     let solve_start = Instant::now();
-    match DPLLSolver::new(&problem).solve() {
+
+    match solve_parallel(problem.clone(), num_threads) {
         Some(solution) => {
             stats.sat_count += 1;
             let solve_elapsed = solve_start.elapsed();
