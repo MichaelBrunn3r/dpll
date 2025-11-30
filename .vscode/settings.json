@@ -3,6 +3,7 @@
         "bitvec",
         "dimacs",
         "dpll",
+        "Jeroslow",
         "mmap"
     ]
 }

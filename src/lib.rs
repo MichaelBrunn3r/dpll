@@ -13,6 +13,8 @@ pub mod utils;
 pub struct DPLLSolver<'p> {
     problem: &'p Problem,
     assignment: PartialAssignment,
+    /// Pre-calculated Jeroslow-Wang for each variable.
+    var_scores: Vec<f64>,
     /// Reusable buffer to store literals that become falsified during unit propagation.
     falsified_lits_buffer: Vec<Lit>,
 }
@@ -23,6 +25,7 @@ impl<'p> DPLLSolver<'p> {
         DPLLSolver {
             problem,
             assignment: PartialAssignment::new(num_vars),
+            var_scores: problem.calculate_jeroslow_wang_scores(),
             falsified_lits_buffer: Vec::new(),
         }
     }
@@ -100,7 +103,7 @@ impl<'p> DPLLSolver<'p> {
 
     /// Makes a branching decision by selecting an unassigned variable and assigning it to true.
     fn make_branching_decision(&mut self) -> Lit {
-        let decision_var = match self.find_most_frequent_var_in_undecided_clauses() {
+        let decision_var = match self.find_var_with_highest_score() {
             Some(v) => v,
             None => {
                 debug_assert!(
@@ -125,13 +128,41 @@ impl<'p> DPLLSolver<'p> {
 
     // --- Heuristics ---
 
+    fn find_var_with_highest_score(&self) -> Option<usize> {
+        let mut max_score = f64::MIN;
+        let mut best_var = None;
+
+        for var in 0..self.problem.num_vars {
+            if self.assignment[var].is_none() {
+                let score = self.var_scores[var];
+                if score > max_score {
+                    max_score = score;
+                    best_var = Some(var);
+                }
+            }
+        }
+
+        best_var
+    }
+
+    #[allow(dead_code)]
     fn find_most_frequent_var_in_undecided_clauses(&self) -> Option<usize> {
         let mut max_count = 0;
         let mut most_freq_var = None;
 
         for var in 0..self.problem.num_vars {
             if self.assignment[var].is_none() {
-                let count = self.count_var_occurrences_in_undecided_clauses(var);
+                let count = self
+                    .problem
+                    .clauses_containing_var(var)
+                    .filter(|c| {
+                        matches!(
+                            c.eval_with(&self.assignment),
+                            ClauseState::Unit(_) | ClauseState::Undecided(_)
+                        )
+                    })
+                    .count();
+
                 if count > max_count {
                     max_count = count;
                     most_freq_var = Some(var);
@@ -140,18 +171,6 @@ impl<'p> DPLLSolver<'p> {
         }
 
         most_freq_var
-    }
-
-    fn count_var_occurrences_in_undecided_clauses(&self, var: VariableId) -> usize {
-        self.problem
-            .clauses_containing_var(var)
-            .filter(|c| {
-                matches!(
-                    c.eval_with(&self.assignment),
-                    ClauseState::Unit(_) | ClauseState::Undecided(_)
-                )
-            })
-            .count()
     }
 }
 

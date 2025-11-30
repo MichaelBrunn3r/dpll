@@ -55,7 +55,6 @@ impl Problem {
         Ok(())
     }
 
-    // return iterator over clauses containing the given literal
     pub fn clauses_containing_lit(&self, lit: Lit) -> impl Iterator<Item = &Clause> {
         let clause_ids = &self.lit2clauses[lit.0 as usize];
         clause_ids.iter().map(|&id| &self.clauses[id])
@@ -64,6 +63,22 @@ impl Problem {
     pub fn clauses_containing_var(&self, var_id: usize) -> impl Iterator<Item = &Clause> {
         let clause_ids = &self.var2clauses[var_id];
         clause_ids.iter().map(|&id| &self.clauses[id])
+    }
+
+    /// Calculates the Jeroslow-Wang scores for all variables in the problem.
+    pub fn calculate_jeroslow_wang_scores(&self) -> Vec<f64> {
+        let mut var_scores = vec![0.0; self.num_vars];
+
+        for clause in &self.clauses {
+            // Weight of the clause is 2^(-|clause|)
+            let clause_weight = 2f64.powf(-(clause.0.len() as f64));
+
+            // Add the clause weight to each variable in the clause
+            for lit in &clause.0 {
+                var_scores[lit.var()] += clause_weight;
+            }
+        }
+        var_scores
     }
 }
 
