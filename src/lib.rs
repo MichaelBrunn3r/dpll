@@ -24,6 +24,7 @@ pub struct DPLLSolver<'p> {
     /// The current depth in the search tree (number of branching decisions made).
     /// Level 0 is the initial state before any decisions.
     decision_level: usize,
+    falsified_lits_buffer: Vec<Lit>,
 }
 
 impl<'p> DPLLSolver<'p> {
@@ -35,6 +36,7 @@ impl<'p> DPLLSolver<'p> {
             decision_level_starts: vec![0],
             var_assignment_history: Vec::new(),
             decision_level: 0,
+            falsified_lits_buffer: Vec::new(),
         }
     }
 
@@ -68,10 +70,11 @@ impl<'p> DPLLSolver<'p> {
 
     /// Performs unit propagation starting from the literal that was just falsified.
     fn propagate_units(&mut self, falsified_lit: Lit) -> PropagationResult {
-        let mut falsified_lits: Vec<Lit> = vec![falsified_lit];
+        self.falsified_lits_buffer.clear();
+        self.falsified_lits_buffer.push(falsified_lit);
 
         // For each literal that was just falsified, check only the affected clauses.
-        while let Some(lit) = falsified_lits.pop() {
+        while let Some(lit) = self.falsified_lits_buffer.pop() {
             'clauses: for clause in self.problem.clauses_containing_lit(lit) {
                 match clause.eval_with(&self.assignment) {
                     ClauseState::Satisfied => continue 'clauses, // 1 clause satisfied => check next
@@ -92,7 +95,7 @@ impl<'p> DPLLSolver<'p> {
                             self.assign_variable(unit_literal.var_id(), unit_literal.is_pos());
 
                             // Unit literal is now true => its negation is false
-                            falsified_lits.push(unit_literal.negated());
+                            self.falsified_lits_buffer.push(unit_literal.negated());
                         }
                     }
                 }
