@@ -1,3 +1,5 @@
+use std::sync::atomic::{self, AtomicBool};
+
 use crate::{
     clause::{ClauseState, Lit},
     partial_assignment::PartialAssignment,
@@ -34,10 +36,14 @@ impl<'p> DPLLSolver<'p> {
         }
     }
 
-    pub fn solve(&mut self) -> Option<Vec<bool>> {
+    pub fn solve(&mut self, abort_flag: &AtomicBool) -> Option<Vec<bool>> {
         let mut next_falsified_lit = self.make_branching_decision();
 
         'backtrack: loop {
+            if abort_flag.load(atomic::Ordering::Relaxed) {
+                return None;
+            }
+
             match self.propagate_units(next_falsified_lit) {
                 PropagationResult::Satisfied => {
                     return Some(self.assignment.to_solution());

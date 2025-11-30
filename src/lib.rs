@@ -50,14 +50,8 @@ impl SolverPool {
                         _ => break, // Channel closed, stop the worker
                     };
 
-                    if job.solution_found_flag.load(atomic::Ordering::Acquire) {
-                        // Notify that we are "done" (skipped)
-                        let _ = job.sender.send(JobResult::Done);
-                        continue;
-                    }
-
                     let mut solver = DPLLSolver::with_assignment(&job.problem, job.assignment);
-                    match solver.solve() {
+                    match solver.solve(&job.solution_found_flag) {
                         Some(solution) => {
                             // Signal other workers to stop working on this job
                             job.solution_found_flag
@@ -87,7 +81,7 @@ impl SolverPool {
             None => {
                 // Single-threaded mode
                 let mut solver = DPLLSolver::new(&problem);
-                return solver.solve();
+                return solver.solve(&AtomicBool::new(false));
             }
         };
 
