@@ -7,35 +7,29 @@ pub struct Problem {
     pub var2clauses: Vec<Vec<ClauseID>>,
     /// Maps each literal to the list of clauses it appears in.
     pub lit2clauses: Vec<Vec<ClauseID>>,
+    pub var_scores: Vec<f64>,
 }
 
 impl Problem {
-    pub fn new(num_vars: usize, num_clauses: usize) -> Self {
+    pub fn new(num_vars: usize, clauses: Vec<Clause>) -> Self {
+        let var_scores = Self::calculate_jeroslow_wang_scores(&clauses, num_vars);
+        let mut lit2clauses = vec![Vec::new(); num_vars * 2];
+        let mut var2clauses = vec![Vec::new(); num_vars];
+
+        for (clause_id, clause) in clauses.iter().enumerate() {
+            for lit in &clause.0 {
+                lit2clauses[lit.0 as usize].push(clause_id);
+                var2clauses[lit.var()].push(clause_id);
+            }
+        }
+
         Problem {
             num_vars,
-            clauses: Vec::with_capacity(num_clauses),
-            var2clauses: vec![Vec::new(); num_vars],
-            lit2clauses: vec![Vec::new(); num_vars * 2], // Each variable can be positive or negated
+            clauses,
+            var2clauses,
+            lit2clauses,
+            var_scores,
         }
-    }
-
-    pub fn add_clause(&mut self, clause: &mut Clause) {
-        // Ensure literals are unique and sorted
-        clause.0.sort_unstable();
-        clause.0.dedup();
-
-        // Ignore tautological clauses
-        if clause.is_tautology() {
-            return;
-        }
-
-        let clause_id = self.clauses.len();
-        for lit in &clause.0 {
-            self.lit2clauses[lit.0 as usize].push(clause_id);
-            self.var2clauses[lit.var()].push(clause_id);
-        }
-
-        self.clauses.push(clause.clone());
     }
 
     /// Verifies if the given assignment satisfies all clauses in the problem.
@@ -66,10 +60,10 @@ impl Problem {
     }
 
     /// Calculates the Jeroslow-Wang scores for all variables in the problem.
-    pub fn calculate_jeroslow_wang_scores(&self) -> Vec<f64> {
-        let mut var_scores = vec![0.0; self.num_vars];
+    pub fn calculate_jeroslow_wang_scores(clauses: &[Clause], num_vars: usize) -> Vec<f64> {
+        let mut var_scores = vec![0.0; num_vars];
 
-        for clause in &self.clauses {
+        for clause in clauses {
             // Weight of the clause is 2^(-|clause|)
             let clause_weight = 2f64.powf(-(clause.0.len() as f64));
 
@@ -84,3 +78,34 @@ impl Problem {
 
 /// Identifier for a clause that is unique within a Problem.
 type ClauseID = usize;
+
+pub struct ProblemBuilder {
+    num_vars: usize,
+    clauses: Vec<Clause>,
+}
+
+impl ProblemBuilder {
+    pub fn new(num_vars: usize, num_clauses: usize) -> Self {
+        ProblemBuilder {
+            num_vars,
+            clauses: Vec::with_capacity(num_clauses),
+        }
+    }
+
+    pub fn add_clause(&mut self, clause: &mut Clause) {
+        // Ensure literals are unique and sorted
+        clause.0.sort_unstable();
+        clause.0.dedup();
+
+        // Ignore tautological clauses
+        if clause.is_tautology() {
+            return;
+        }
+
+        self.clauses.push(clause.clone());
+    }
+
+    pub fn build(self) -> Problem {
+        Problem::new(self.num_vars, self.clauses)
+    }
+}

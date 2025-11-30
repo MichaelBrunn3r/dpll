@@ -2,6 +2,7 @@
 use crate::{
     Problem,
     clause::{Clause, Lit},
+    problem::ProblemBuilder,
 };
 
 /// Parses a DIMACS CNF formatted byte array into a Problem instance.
@@ -31,7 +32,7 @@ pub fn parse_dimacs_cnf(data: &[u8]) -> Result<Problem, String> {
         .parse_usize()
         .ok_or_else(|| "Expected number of clauses".to_string())?;
 
-    let mut problem = Problem::new(num_vars, num_clauses);
+    let mut problem_builder = ProblemBuilder::new(num_vars, num_clauses);
 
     // Reusable buffer for clause literals
     let mut clause_buffer = Clause(Vec::new());
@@ -69,10 +70,10 @@ pub fn parse_dimacs_cnf(data: &[u8]) -> Result<Problem, String> {
             clause_buffer.0.push(Lit::new(var_idx, !is_negated));
         }
 
-        problem.add_clause(&mut clause_buffer);
+        problem_builder.add_clause(&mut clause_buffer);
     }
 
-    Ok(problem)
+    Ok(problem_builder.build())
 }
 
 /// An iterator over a byte array with utility methods for parsing.

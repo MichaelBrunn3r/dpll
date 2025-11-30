@@ -1,4 +1,5 @@
 use crate::{dpll::DPLLSolver, problem::Problem};
+use itertools::Itertools;
 use std::{
     collections::VecDeque,
     sync::{
@@ -46,7 +47,7 @@ impl SolverPool {
                         _ => break, // Channel closed, stop the worker
                     };
 
-                    if job.solution_found_flag.load(atomic::Ordering::Relaxed) {
+                    if job.solution_found_flag.load(atomic::Ordering::Acquire) {
                         // Notify that we are "done" (skipped)
                         let _ = job.sender.send(JobResult::Done);
                         continue;
@@ -57,7 +58,7 @@ impl SolverPool {
                         Some(solution) => {
                             // Signal other workers to stop working on this job
                             job.solution_found_flag
-                                .store(true, atomic::Ordering::Relaxed);
+                                .store(true, atomic::Ordering::Release);
                             // Send the found solution
                             let _ = job.sender.send(JobResult::Found(solution));
                         }
@@ -90,15 +91,10 @@ impl SolverPool {
         let solution_found = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
 
-        let initial_assignments = generate_initial_assignments(
-            problem.num_vars,
-            Self::calculate_depth(self.num_workers, problem.num_vars).min(problem.num_vars),
-        );
+        let depth = Self::calculate_depth(self.num_workers, problem.num_vars);
+        let split_vars = Self::select_split_vars(&problem, depth);
+        let initial_assignments = generate_initial_assignments(problem.num_vars, &split_vars);
         let num_jobs = initial_assignments.len();
-        debug_assert!(
-            num_jobs >= self.num_workers,
-            "Number of jobs should be at least number of workers"
-        );
 
         for assignment in initial_assignments {
             let job = Job {
@@ -135,20 +131,34 @@ impl SolverPool {
     pub fn calculate_depth(num_workers: usize, num_vars: usize) -> usize {
         ((num_workers as f64).log2().ceil() as usize).min(num_vars)
     }
+
+    fn select_split_vars(problem: &Problem, depth: usize) -> Vec<usize> {
+        // Sort variables by score in descending order
+        let sorted_vars = problem
+            .var_scores
+            .iter()
+            .enumerate()
+            .map(|(var, &score)| (var, score))
+            .sorted_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Take the variables with the highest scores
+        sorted_vars.take(depth).map(|(var, _)| var).collect()
+    }
 }
 
-pub fn generate_initial_assignments(num_vars: usize, depth: usize) -> VecDeque<Vec<Option<bool>>> {
+pub fn generate_initial_assignments(
+    num_vars: usize,
+    split_vars: &[usize],
+) -> VecDeque<Vec<Option<bool>>> {
+    let depth = split_vars.len();
     let mut initial_assignments: VecDeque<Vec<Option<bool>>> = VecDeque::new();
 
     let mut assignment = 0usize;
     for _ in 0..(1 << depth) {
         let mut assignment_vec = vec![None; num_vars];
         for i in 0..depth {
-            if (assignment & (1 << i)) != 0 {
-                assignment_vec[i] = Some(true);
-            } else {
-                assignment_vec[i] = Some(false);
-            }
+            let val = (assignment & (1 << i)) != 0;
+            assignment_vec[split_vars[i]] = Some(val);
         }
         initial_assignments.push_back(assignment_vec);
         assignment += 1;

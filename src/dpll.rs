@@ -7,8 +7,6 @@ use crate::{
 pub struct DPLLSolver<'p> {
     problem: &'p Problem,
     assignment: PartialAssignment,
-    /// Pre-calculated Jeroslow-Wang for each variable.
-    var_scores: Vec<f64>,
     /// Reusable buffer to store literals that become falsified during unit propagation.
     falsified_lits_buffer: Vec<Lit>,
 }
@@ -19,7 +17,6 @@ impl<'p> DPLLSolver<'p> {
         DPLLSolver {
             problem,
             assignment: PartialAssignment::new(num_vars),
-            var_scores: problem.calculate_jeroslow_wang_scores(),
             falsified_lits_buffer: Vec::new(),
         }
     }
@@ -33,7 +30,6 @@ impl<'p> DPLLSolver<'p> {
         DPLLSolver {
             problem,
             assignment: PartialAssignment::with_assignment(initial_assignment),
-            var_scores: problem.calculate_jeroslow_wang_scores(),
             falsified_lits_buffer: Vec::new(),
         }
     }
@@ -142,7 +138,7 @@ impl<'p> DPLLSolver<'p> {
 
         for var in 0..self.problem.num_vars {
             if self.assignment[var].is_none() {
-                let score = self.var_scores[var];
+                let score = self.problem.var_scores[var];
                 if score > max_score {
                     max_score = score;
                     best_var = Some(var);
