@@ -1,6 +1,5 @@
+use crate::partial_assignment::PartialAssignment;
 use std::ops::{Deref, DerefMut};
-
-use crate::PartialAssignment;
 
 /// A view of a clauses literals.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,69 +10,17 @@ impl Clause {
     /// Assumes the clause is sorted and contains unique literals.
     pub fn is_tautology(&self) -> bool {
         for i in 0..self.0.len().saturating_sub(1) {
-            if self.0[i].var_id() == self.0[i + 1].var_id() {
+            if self.0[i].var() == self.0[i + 1].var() {
                 return true;
             }
         }
         false
     }
 
-    /// Checks if the clause conflicts with the given partial assignment.
-    /// A conflict occurs if all literals in the clause evaluate to false.
-    pub fn conflicts_with(&self, assignment: &PartialAssignment) -> bool {
-        for &lit in &self.0 {
-            match assignment[lit.var_id()] {
-                None => return false, // Not a conflict yet
-                Some(true) => {
-                    if lit.is_pos() {
-                        return false;
-                    }
-                }
-                Some(false) => {
-                    if lit.is_neg() {
-                        return false;
-                    }
-                }
-            }
-        }
-        true
-    }
-
-    /// For a given partial assignment, finds a unit literal in the clause if it exists.
-    pub fn find_unit_literal(&self, assignment: &PartialAssignment) -> Option<Lit> {
-        let mut unassigned_count = 0usize;
-        let mut unit_lit = None;
-
-        for &lit in &self.0 {
-            let is_pos = lit.is_pos();
-            match assignment[lit.var_id()] {
-                Some(true) => {
-                    if is_pos {
-                        return None;
-                    }
-                }
-                Some(false) => {
-                    if !is_pos {
-                        return None;
-                    }
-                }
-                None => {
-                    if unassigned_count > 0 {
-                        return None;
-                    }
-                    unassigned_count += 1;
-                    unit_lit = Some(lit);
-                }
-            }
-        }
-
-        unit_lit
-    }
-
     /// Checks if the clause is satisfied by the given assignment.
     pub fn is_satisfied_by(&self, assignment: &[bool]) -> bool {
         for &lit in &self.0 {
-            if lit.eval_with(assignment[lit.var_id()]) {
+            if lit.eval_with(assignment[lit.var()]) {
                 return true;
             }
         }
@@ -86,7 +33,7 @@ impl Clause {
         let mut unit_lit = None;
 
         for &lit in &self.0 {
-            if let Some(val) = assignment[lit.var_id()] {
+            if let Some(val) = assignment[lit.var()] {
                 if lit.eval_with(val) {
                     return ClauseState::Satisfied;
                 }
@@ -132,6 +79,8 @@ pub enum ClauseState {
 // Literal
 // --------------------------------
 
+pub type VariableId = usize;
+
 /// A propositional logic literal, i.e. a variable or its negation.
 ///
 /// E.g. `x` or `¬x`, where `x` is a variable.
@@ -145,7 +94,7 @@ impl Lit {
     }
 
     /// Returns the variable ID (0-based) of the literal.
-    pub fn var_id(&self) -> usize {
+    pub fn var(&self) -> usize {
         (self.0 >> 1) as usize
     }
 
@@ -164,8 +113,8 @@ impl Lit {
         Lit(self.0 ^ 1)
     }
 
-    pub fn negated_var_id(var_id: usize) -> usize {
-        (var_id << 1) | 1
+    pub fn negated_var(var: VariableId) -> usize {
+        (var << 1) | 1
     }
 
     /// Evaluates the literal given a boolean value for its variable.
@@ -187,9 +136,9 @@ impl From<i32> for Lit {
 impl std::fmt::Display for Lit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.is_pos() {
-            write!(f, "{}", self.var_id() + 1)
+            write!(f, "{}", self.var() + 1)
         } else {
-            write!(f, "¬{}", self.var_id() + 1)
+            write!(f, "¬{}", self.var() + 1)
         }
     }
 }

@@ -32,7 +32,7 @@ impl Problem {
         let clause_id = self.clauses.len();
         for lit in &clause.0 {
             self.lit2clauses[lit.0 as usize].push(clause_id);
-            self.var2clauses[lit.var_id()].push(clause_id);
+            self.var2clauses[lit.var()].push(clause_id);
         }
 
         self.clauses.push(clause.clone());
