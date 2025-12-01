@@ -16,7 +16,7 @@ stackvector = "1.1.0"
 criterion = "0.8.0"
 
 [[bench]]
-name = "parser"
+name = "bench"
 harness = false
 
 [profile.perf]

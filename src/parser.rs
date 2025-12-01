@@ -4,6 +4,7 @@ use stackvector::StackVec;
 use crate::{
     Problem,
     clause::{Clause, Lit},
+    constants::MAX_LITS_PER_CLAUSE,
     problem::ProblemBuilder,
 };
 
@@ -73,10 +74,10 @@ pub fn parse_dimacs_cnf(data: &[u8]) -> Result<Problem, String> {
         }
 
         debug_assert!(
-            clause_buffer.len() <= Clause::MAX_EXPECTED_LITS,
+            clause_buffer.len() <= MAX_LITS_PER_CLAUSE,
             "Clause size {} exceeds expected maximum of {} => Allocated on the heap.",
             clause_buffer.len(),
-            Clause::MAX_EXPECTED_LITS
+            MAX_LITS_PER_CLAUSE
         );
         problem_builder.add_clause(&mut clause_buffer);
     }

@@ -15,6 +15,7 @@ use std::{
 };
 
 pub mod clause;
+pub mod constants;
 pub mod dpll;
 pub mod parser;
 pub mod partial_assignment;

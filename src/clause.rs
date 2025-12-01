@@ -1,16 +1,15 @@
-use crate::partial_assignment::{PartialAssignment, VarState};
+use crate::{
+    constants::MAX_LITS_PER_CLAUSE,
+    partial_assignment::{PartialAssignment, VarState},
+};
 use stackvector::StackVec;
 use std::ops::{Deref, DerefMut};
 
 /// A view of a clauses literals.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Clause(pub StackVec<[Lit; Clause::MAX_EXPECTED_LITS]>);
+pub struct Clause(pub StackVec<[Lit; MAX_LITS_PER_CLAUSE]>);
 
 impl Clause {
-    /// Maximum expected number of literals in a clause.
-    /// Clauses larger than this will be heap allocated.
-    pub const MAX_EXPECTED_LITS: usize = 8;
-
     /// Checks if a clause is a tautology (contains both a literal and its negation).
     /// Assumes the clause is sorted and contains unique literals.
     pub fn is_tautology(&self) -> bool {
@@ -80,7 +79,7 @@ impl Clause {
 }
 
 impl Deref for Clause {
-    type Target = StackVec<[Lit; Clause::MAX_EXPECTED_LITS]>;
+    type Target = StackVec<[Lit; MAX_LITS_PER_CLAUSE]>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

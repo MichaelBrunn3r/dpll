@@ -1,20 +1,34 @@
 use stackvector::StackVec;
 
-use crate::clause::{Clause, Lit};
+use crate::{
+    clause::{Clause, Lit, VariableId},
+    constants::{MAX_CLAUSES_PER_LIT, MAX_CLAUSES_PER_VAR},
+};
 
 pub struct Problem {
     pub num_vars: usize,
     pub clauses: Vec<Clause>,
     /// Maps each variable to the list of clauses it appears in.
-    pub var2clauses: Vec<StackVec<[ClauseID; 32]>>,
+    pub var2clauses: Vec<StackVec<[ClauseID; MAX_CLAUSES_PER_VAR]>>,
     /// Maps each literal to the list of clauses it appears in.
-    pub lit2clauses: Vec<StackVec<[ClauseID; 32]>>,
+    pub lit2clauses: Vec<StackVec<[ClauseID; MAX_CLAUSES_PER_LIT]>>,
+    /// Jeroslow-Wang scores for each variable.
     pub var_scores: Vec<f64>,
+    /// Variables sorted by their Jeroslow-Wang scores in descending order.
+    pub vars_by_score: Vec<VariableId>,
 }
 
 impl Problem {
     pub fn new(num_vars: usize, clauses: Vec<Clause>) -> Self {
         let var_scores = Self::calculate_jeroslow_wang_scores(&clauses, num_vars);
+
+        let mut vars_by_score: Vec<usize> = (0..num_vars).collect();
+        vars_by_score.sort_by(|&a, &b| {
+            var_scores[b]
+                .partial_cmp(&var_scores[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         let mut lit2clauses = vec![StackVec::new(); num_vars * 2];
         let mut var2clauses = vec![StackVec::new(); num_vars];
 
@@ -31,6 +45,7 @@ impl Problem {
             var2clauses,
             lit2clauses,
             var_scores,
+            vars_by_score,
         }
     }
 

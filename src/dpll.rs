@@ -3,6 +3,7 @@ use std::sync::atomic::{self, AtomicBool};
 
 use crate::{
     clause::{ClauseState, Lit},
+    constants::MAX_FALSIFIED_LITS,
     partial_assignment::{PartialAssignment, VarState},
     problem::Problem,
 };
@@ -10,14 +11,13 @@ use crate::{
 pub struct DPLLSolver<'a> {
     problem: &'a Problem,
     assignment: PartialAssignment<'a>,
-    falsified_lits_buffer: StackVec<[Lit; DPLLSolver::MAX_EXPECTED_FALSIFIED_LITS]>,
+    /// Reusable buffer for literals that have just been falsified during unit propagation.
+    falsified_lits_buffer: StackVec<[Lit; MAX_FALSIFIED_LITS]>,
+    /// Index to track the next candidate variable for branching decisions.
+    next_decision_candidate_idx: usize,
 }
 
 impl<'a> DPLLSolver<'a> {
-    /// Maximum expected number of literals that can become falsified during unit propagation.
-    /// Any more will cause heap allocation.
-    pub const MAX_EXPECTED_FALSIFIED_LITS: usize = 64;
-
     pub fn with_assignment(problem: &'a Problem, initial_assignment: &'a mut [VarState]) -> Self {
         debug_assert!(
             initial_assignment.len() == problem.num_vars,
@@ -28,6 +28,7 @@ impl<'a> DPLLSolver<'a> {
             problem,
             assignment: PartialAssignment::with_assignment(initial_assignment),
             falsified_lits_buffer: StackVec::new(),
+            next_decision_candidate_idx: 0,
         }
     }
 
@@ -44,6 +45,7 @@ impl<'a> DPLLSolver<'a> {
                     return Some(self.assignment.to_solution());
                 }
                 PropagationResult::Unsatisfied => {
+                    self.next_decision_candidate_idx = 0; // Reset decision candidate when backtracking
                     match self.assignment.backtrack() {
                         None => {
                             return None; // Cannot backtrack further => UNSAT
@@ -131,51 +133,16 @@ impl<'a> DPLLSolver<'a> {
             .all(|c| c.is_satisfied_by_partial(&self.assignment))
     }
 
-    // --- Heuristics ---
+    fn find_var_with_highest_score(&mut self) -> Option<usize> {
+        for &var in &self.problem.vars_by_score[self.next_decision_candidate_idx..] {
+            self.next_decision_candidate_idx += 1;
 
-    fn find_var_with_highest_score(&self) -> Option<usize> {
-        let mut max_score = f64::MIN;
-        let mut best_var = None;
-
-        for var in 0..self.problem.num_vars {
             if self.assignment[var].is_unassigned() {
-                let score = self.problem.var_scores[var];
-                if score > max_score {
-                    max_score = score;
-                    best_var = Some(var);
-                }
+                return Some(var);
             }
         }
 
-        best_var
-    }
-
-    #[allow(dead_code)]
-    fn find_most_frequent_var_in_undecided_clauses(&self) -> Option<usize> {
-        let mut max_count = 0;
-        let mut most_freq_var = None;
-
-        for var in 0..self.problem.num_vars {
-            if self.assignment[var].is_unassigned() {
-                let count = self
-                    .problem
-                    .clauses_containing_var(var)
-                    .filter(|c| {
-                        matches!(
-                            c.eval_with_partial(&self.assignment),
-                            ClauseState::Unit(_) | ClauseState::Undecided(_)
-                        )
-                    })
-                    .count();
-
-                if count > max_count {
-                    max_count = count;
-                    most_freq_var = Some(var);
-                }
-            }
-        }
-
-        most_freq_var
+        unreachable!("PropagationResult::Undecided implies some unassigned variable exists.")
     }
 }
 
