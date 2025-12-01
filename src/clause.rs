@@ -128,12 +128,12 @@ impl Lit {
         (self.0 >> 1) as usize
     }
 
-    /// Returns true if the variable is not negated.
+    /// Returns true if the variable is positive.
     pub fn is_pos(self) -> bool {
         (self.0 & 1) == 0
     }
 
-    /// Returns true if the variable is negated.
+    /// Returns true if the variable is negative (negated).
     pub fn is_neg(self) -> bool {
         (self.0 & 1) == 1
     }
@@ -160,16 +160,6 @@ impl From<i32> for Lit {
         let var = value.abs() as usize - 1;
         let is_pos = value > 0;
         Lit::new(var, is_pos)
-    }
-}
-
-impl std::fmt::Display for Lit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.is_pos() {
-            write!(f, "{}", self.var() + 1)
-        } else {
-            write!(f, "¬{}", self.var() + 1)
-        }
     }
 }
 

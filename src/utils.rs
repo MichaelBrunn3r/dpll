@@ -25,3 +25,26 @@ macro_rules! generator {
         )
     };
 }
+
+#[macro_export]
+macro_rules! record_time {
+    ($durations:expr, $block:block) => {{
+        let start = std::time::Instant::now();
+        let result = { $block };
+        let duration = start.elapsed();
+        $durations.push(duration);
+        result
+    }};
+}
+
+#[macro_export]
+macro_rules! measure_time {
+    ($block:block) => {{
+        let start = std::time::Instant::now();
+        {
+            $block
+        };
+        let duration = start.elapsed();
+        duration
+    }};
+}
