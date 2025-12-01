@@ -2,7 +2,7 @@
 #![feature(coroutines)]
 #![feature(yield_expr)]
 
-use crate::{dpll::DPLLSolver, problem::Problem};
+use crate::{dpll::DPLLSolver, partial_assignment::VarState, problem::Problem};
 use itertools::Itertools;
 use std::{
     sync::{
@@ -49,14 +49,14 @@ impl SolverPool {
                 while let Ok(job) = rx.recv() {
                     // Ensure buffer capacity
                     if assignment_buffer.len() < job.problem.num_vars {
-                        assignment_buffer.resize(job.problem.num_vars, None);
+                        assignment_buffer.resize(job.problem.num_vars, VarState::new_unassigned());
                     }
 
                     // Reconstruct partial assignment from combination
-                    assignment_buffer[0..job.problem.num_vars].fill(None);
+                    assignment_buffer[0..job.problem.num_vars].fill(VarState::new_unassigned());
                     for (bit_idx, &var_idx) in job.split_vars.iter().enumerate() {
                         let val = (job.combination & (1 << bit_idx)) != 0;
-                        assignment_buffer[var_idx] = Some(val);
+                        assignment_buffer[var_idx] = VarState::new_assigned(val);
                     }
 
                     let mut solver = DPLLSolver::with_assignment(
@@ -92,7 +92,7 @@ impl SolverPool {
             Some(tx) => tx,
             None => {
                 // Single-threaded mode
-                let mut assignment_buffer = vec![None; problem.num_vars];
+                let mut assignment_buffer = vec![VarState::new_unassigned(); problem.num_vars];
                 let mut solver = DPLLSolver::with_assignment(&problem, &mut assignment_buffer);
                 return solver.solve(&AtomicBool::new(false));
             }
@@ -178,7 +178,7 @@ impl SolverPool {
         let combinations = 1usize << split_vars.len();
 
         generator!(move || {
-            let mut assignment = vec![None; num_vars];
+            let mut assignment = vec![VarState::new_unassigned(); num_vars];
             for combination in 0..combinations {
                 // Check if a solution has been found since we started generating
                 if solution_found.load(atomic::Ordering::Relaxed) {
@@ -187,7 +187,7 @@ impl SolverPool {
 
                 for (bit_idx, &var) in split_vars.iter().enumerate() {
                     let val = (combination & (1 << bit_idx)) != 0;
-                    assignment[var] = Some(val);
+                    assignment[var] = VarState::new_assigned(val);
                 }
 
                 // Check if any clause containing split vars is unsatisfied

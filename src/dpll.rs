@@ -2,7 +2,7 @@ use std::sync::atomic::{self, AtomicBool};
 
 use crate::{
     clause::{ClauseState, Lit},
-    partial_assignment::PartialAssignment,
+    partial_assignment::{PartialAssignment, VarState},
     problem::Problem,
 };
 
@@ -14,10 +14,7 @@ pub struct DPLLSolver<'a> {
 }
 
 impl<'a> DPLLSolver<'a> {
-    pub fn with_assignment(
-        problem: &'a Problem,
-        initial_assignment: &'a mut [Option<bool>],
-    ) -> Self {
+    pub fn with_assignment(problem: &'a Problem, initial_assignment: &'a mut [VarState]) -> Self {
         debug_assert!(
             initial_assignment.len() == problem.num_vars,
             "Initial assignment length must match number of variables."
@@ -78,9 +75,9 @@ impl<'a> DPLLSolver<'a> {
                     ClauseState::Undecided(_) => continue 'clauses, // continue checking for conflicts and unit clauses
                     ClauseState::Unit(unit_literal) => {
                         let var = unit_literal.var();
-                        if let Some(val) = self.assignment[var] {
+                        if self.assignment[var].is_assigned() {
                             // Check if the variable is already assigned the opposite value
-                            if val != unit_literal.is_pos() {
+                            if !self.assignment[var].is_bool(unit_literal.is_pos()) {
                                 return PropagationResult::Unsatisfied; // Conflict => backtrack
                             }
                             // Variable already assigned correctly, no action needed
@@ -137,7 +134,7 @@ impl<'a> DPLLSolver<'a> {
         let mut best_var = None;
 
         for var in 0..self.problem.num_vars {
-            if self.assignment[var].is_none() {
+            if self.assignment[var].is_unassigned() {
                 let score = self.problem.var_scores[var];
                 if score > max_score {
                     max_score = score;
@@ -155,7 +152,7 @@ impl<'a> DPLLSolver<'a> {
         let mut most_freq_var = None;
 
         for var in 0..self.problem.num_vars {
-            if self.assignment[var].is_none() {
+            if self.assignment[var].is_unassigned() {
                 let count = self
                     .problem
                     .clauses_containing_var(var)
