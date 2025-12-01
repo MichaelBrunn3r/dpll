@@ -11,3 +11,5 @@ devenv.local.nix
 /target
 /uf*
 /uuf*
+flamegraph.svg
+perf.*

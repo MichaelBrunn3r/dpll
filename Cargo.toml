@@ -24,4 +24,14 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
-rustflags = ["-C", "target-cpu=native", "-C", "link-arg=-fuse-ld=mold"]
+rustflags = ["-Ctarget-cpu=native", "-Clink-arg=-fuse-ld=mold"]
+
+[profile.flamegraph]
+inherits = "perf"
+debug = true
+strip = false
+rustflags = [
+    "-Ctarget-cpu=native",
+    "-Clink-arg=-fuse-ld=mold",
+    "-Clink-arg=-Wl,--no-rosegment",
+]

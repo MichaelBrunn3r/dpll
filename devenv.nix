@@ -5,7 +5,7 @@
   inputs,
   ...
 }: {
-  packages = [pkgs.git];
+  packages = with pkgs; [git perf];
   languages.rust = {
     enable = true;
     channel = "nightly";
