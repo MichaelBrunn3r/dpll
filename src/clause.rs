@@ -46,7 +46,7 @@ impl Clause {
     /// Evaluates the clause under the given partial assignment.
     pub fn eval_with_partial(&self, part_assignment: &PartialAssignment) -> ClauseState {
         let mut unassigned_count = 0usize;
-        let mut unit_lit = None;
+        let mut unit_lit = Lit::INVALID;
 
         for &lit in &self.0 {
             let var_state = part_assignment.get_unchecked(lit.var());
@@ -55,13 +55,20 @@ impl Clause {
                 return ClauseState::Satisfied;
             } else if var_state.is_unassigned() {
                 unassigned_count += 1;
-                unit_lit = Some(lit);
+                unit_lit = lit;
             }
         }
 
         match unassigned_count {
-            0 => ClauseState::Unsatisfied,                 // All assigned false
-            1 => ClauseState::Unit(unit_lit.unwrap()),     // Exactly one unassigned, others false
+            0 => ClauseState::Unsatisfied, // All assigned false
+            1 => {
+                // Exactly one unassigned, others false
+                debug_assert!(
+                    unit_lit != Lit::INVALID,
+                    "Unit literal should have been set."
+                );
+                ClauseState::Unit(unit_lit)
+            }
             _ => ClauseState::Undecided(unassigned_count), // More than one unassigned
         }
     }
@@ -101,31 +108,34 @@ pub type VariableId = usize;
 ///
 /// E.g. `x` or `¬x`, where `x` is a variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
 pub struct Lit(pub u32);
 
 impl Lit {
+    const INVALID: Lit = Lit(u32::MAX);
+
     #[inline]
     pub fn new(var: usize, is_pos: bool) -> Self {
         Lit((var as u32) << 1 | (!is_pos as u32))
     }
 
     /// Returns the variable ID (0-based) of the literal.
-    pub fn var(&self) -> usize {
+    pub fn var(self) -> usize {
         (self.0 >> 1) as usize
     }
 
     /// Returns true if the variable is not negated.
-    pub fn is_pos(&self) -> bool {
+    pub fn is_pos(self) -> bool {
         (self.0 & 1) == 0
     }
 
     /// Returns true if the variable is negated.
-    pub fn is_neg(&self) -> bool {
+    pub fn is_neg(self) -> bool {
         (self.0 & 1) == 1
     }
 
     /// Returns the negated version of this literal.
-    pub fn negated(&self) -> Self {
+    pub fn negated(self) -> Self {
         Lit(self.0 ^ 1)
     }
 
@@ -136,7 +146,7 @@ impl Lit {
     /// Evaluates the literal given a boolean value for its variable.
     ///
     /// E.g. assigning the variable `x=true` makes the literal `x` evaluate to `true` and `¬x` evaluate to `false`.
-    pub fn eval_with(&self, value: bool) -> bool {
+    pub fn eval_with(self, value: bool) -> bool {
         self.is_neg() ^ value
     }
 }
