@@ -1,3 +1,5 @@
+use stackvector::StackVec;
+
 // Remove Clause from imports, as it's no longer a public struct we construct manually
 use crate::{
     Problem,
@@ -35,7 +37,7 @@ pub fn parse_dimacs_cnf(data: &[u8]) -> Result<Problem, String> {
     let mut problem_builder = ProblemBuilder::new(num_vars, num_clauses);
 
     // Reusable buffer for clause literals
-    let mut clause_buffer = Clause(Vec::new());
+    let mut clause_buffer = Clause(StackVec::new());
 
     // Parse each clause
     for _ in 0..num_clauses {
@@ -70,6 +72,12 @@ pub fn parse_dimacs_cnf(data: &[u8]) -> Result<Problem, String> {
             clause_buffer.0.push(Lit::new(var_idx, !is_negated));
         }
 
+        debug_assert!(
+            clause_buffer.len() <= Clause::MAX_EXPECTED_LITS,
+            "Clause size {} exceeds expected maximum of {} => Allocated on the heap.",
+            clause_buffer.len(),
+            Clause::MAX_EXPECTED_LITS
+        );
         problem_builder.add_clause(&mut clause_buffer);
     }
 

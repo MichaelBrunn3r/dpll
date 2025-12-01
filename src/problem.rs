@@ -1,20 +1,22 @@
+use stackvector::StackVec;
+
 use crate::clause::{Clause, Lit};
 
 pub struct Problem {
     pub num_vars: usize,
     pub clauses: Vec<Clause>,
     /// Maps each variable to the list of clauses it appears in.
-    pub var2clauses: Vec<Vec<ClauseID>>,
+    pub var2clauses: Vec<StackVec<[ClauseID; 32]>>,
     /// Maps each literal to the list of clauses it appears in.
-    pub lit2clauses: Vec<Vec<ClauseID>>,
+    pub lit2clauses: Vec<StackVec<[ClauseID; 32]>>,
     pub var_scores: Vec<f64>,
 }
 
 impl Problem {
     pub fn new(num_vars: usize, clauses: Vec<Clause>) -> Self {
         let var_scores = Self::calculate_jeroslow_wang_scores(&clauses, num_vars);
-        let mut lit2clauses = vec![Vec::new(); num_vars * 2];
-        let mut var2clauses = vec![Vec::new(); num_vars];
+        let mut lit2clauses = vec![StackVec::new(); num_vars * 2];
+        let mut var2clauses = vec![StackVec::new(); num_vars];
 
         for (clause_id, clause) in clauses.iter().enumerate() {
             for lit in &clause.0 {

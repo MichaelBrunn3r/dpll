@@ -1,3 +1,4 @@
+use stackvector::StackVec;
 use std::sync::atomic::{self, AtomicBool};
 
 use crate::{
@@ -9,11 +10,14 @@ use crate::{
 pub struct DPLLSolver<'a> {
     problem: &'a Problem,
     assignment: PartialAssignment<'a>,
-    /// Reusable buffer to store literals that become falsified during unit propagation.
-    falsified_lits_buffer: Vec<Lit>,
+    falsified_lits_buffer: StackVec<[Lit; DPLLSolver::MAX_EXPECTED_FALSIFIED_LITS]>,
 }
 
 impl<'a> DPLLSolver<'a> {
+    /// Maximum expected number of literals that can become falsified during unit propagation.
+    /// Any more will cause heap allocation.
+    pub const MAX_EXPECTED_FALSIFIED_LITS: usize = 64;
+
     pub fn with_assignment(problem: &'a Problem, initial_assignment: &'a mut [VarState]) -> Self {
         debug_assert!(
             initial_assignment.len() == problem.num_vars,
@@ -23,7 +27,7 @@ impl<'a> DPLLSolver<'a> {
         DPLLSolver {
             problem,
             assignment: PartialAssignment::with_assignment(initial_assignment),
-            falsified_lits_buffer: Vec::new(),
+            falsified_lits_buffer: StackVec::new(),
         }
     }
 
