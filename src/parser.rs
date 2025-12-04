@@ -2,10 +2,9 @@ use stackvector::StackVec;
 
 // Remove Clause from imports, as it's no longer a public struct we construct manually
 use crate::{
-    Problem,
     clause::{Clause, Lit},
     constants::MAX_LITS_PER_CLAUSE,
-    problem::ProblemBuilder,
+    problem::{Problem, ProblemBuilder},
 };
 
 /// Parses a DIMACS CNF formatted byte array into a Problem instance.

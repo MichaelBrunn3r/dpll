@@ -1,8 +1,9 @@
 // main.rs
 use clap::Parser;
 use dpll::parser::parse_dimacs_cnf;
+use dpll::pool::SolverPool;
 use dpll::utils::human_duration;
-use dpll::{SolverPool, measure_time, record_time};
+use dpll::{measure_time, record_time};
 use log::{error, info, warn};
 use memmap2::Mmap;
 use std::error::Error;

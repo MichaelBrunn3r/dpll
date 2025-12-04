@@ -13,3 +13,4 @@ devenv.local.nix
 /uuf*
 flamegraph.svg
 perf.*
+.git.zip
