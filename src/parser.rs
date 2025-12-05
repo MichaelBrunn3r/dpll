@@ -2,24 +2,26 @@ use stackvector::StackVec;
 
 // Remove Clause from imports, as it's no longer a public struct we construct manually
 use crate::{
-    Problem,
     clause::{Clause, Lit},
     constants::MAX_LITS_PER_CLAUSE,
-    problem::ProblemBuilder,
+    problem::{Problem, ProblemBuilder},
 };
 
 /// Parses a DIMACS CNF formatted byte array into a Problem instance.
 pub fn parse_dimacs_cnf(data: &[u8]) -> Result<Problem, String> {
     let mut iter = ByteArrayIterator::new(data);
 
-    // Skip comments and find the start of the problem line (`p cnf <num_vars> <num_clauses>`)
-    if !iter.skip_until(b'p') {
-        return Err("Unexpected EOF while searching for problem line".to_string());
+    // Skip lines until we find a line starting with 'p'
+    loop {
+        if iter.peek() == b'p' {
+            iter.next();
+            break;
+        }
+        iter.skip_until(b'\n');
     }
 
     iter.skip_ascii_whitespace();
 
-    // Expect 'cnf'
     if !iter.skip_expected(b"cnf") {
         return Err("Expected problem format 'cnf'".to_string());
     }
@@ -99,6 +101,16 @@ impl<'a> ByteArrayIterator<'a> {
             ptr,
             _marker: std::marker::PhantomData,
         }
+    }
+
+    fn peek(&self) -> u8 {
+        unsafe { *self.ptr }
+    }
+
+    fn next(&mut self) -> u8 {
+        let byte = unsafe { *self.ptr };
+        self.ptr = unsafe { self.ptr.add(1) };
+        byte
     }
 
     /// Advances the iterator if the current byte matches the specified byte. No bounds checks.

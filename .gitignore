@@ -9,7 +9,7 @@ devenv.local.nix
 # Added by cargo
 
 /target
-/uf*
-/uuf*
+/problems
 flamegraph.svg
 perf.*
+.git.zip
