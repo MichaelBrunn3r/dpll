@@ -65,13 +65,17 @@ impl WorkerPool {
         let split_vars = Arc::new(Self::select_split_vars(&problem, depth));
 
         let mut active_jobs = 0;
-        for combination in Self::generate_combinations(&problem, &split_vars, &solution_found) {
+        for init_assignment in Self::generate_combinations(&problem, &split_vars) {
+            // Check if a solution has been found while generating jobs
+            if solution_found.load(atomic::Ordering::Relaxed) {
+                break;
+            }
+
             let job = Job {
                 problem: Arc::clone(&problem),
                 solution_found_flag: Arc::clone(&solution_found),
                 sender: tx.clone(),
-                split_vars: split_vars.clone(),
-                combination,
+                init_assignment,
             };
 
             if job_sender.send(job).is_err() {
@@ -126,8 +130,7 @@ impl WorkerPool {
     fn generate_combinations<'p>(
         problem: &'p Problem,
         split_vars: &'p Vec<usize>,
-        solution_found: &'p AtomicBool,
-    ) -> impl Iterator<Item = usize> + 'p {
+    ) -> impl Iterator<Item = Vec<VarState>> + 'p {
         let clauses_containing_split_vars = split_vars
             .iter()
             .flat_map(|&var| problem.clauses_containing_var(var))
@@ -138,12 +141,8 @@ impl WorkerPool {
         let combinations = 1usize << split_vars.len();
 
         generator!(move || {
-            let mut assignment = vec![VarState::new_unassigned(); num_vars];
             for combination in 0..combinations {
-                // Check if a solution has been found since we started generating
-                if solution_found.load(atomic::Ordering::Relaxed) {
-                    return; // Stop generating!
-                }
+                let mut assignment = vec![VarState::new_unassigned(); num_vars];
 
                 for (bit_idx, &var) in split_vars.iter().enumerate() {
                     let val = (combination & (1 << bit_idx)) != 0;
@@ -158,7 +157,7 @@ impl WorkerPool {
                     continue; // Skip this assignment as it leads to unsatisfied clauses
                 }
 
-                yield combination
+                yield assignment
             }
         })
     }
@@ -176,6 +175,6 @@ pub struct Job {
     pub problem: Arc<Problem>,
     pub solution_found_flag: Arc<AtomicBool>,
     pub sender: mpsc::Sender<JobResult>,
-    pub split_vars: Arc<Vec<usize>>,
-    pub combination: usize,
+    // TODO: Switched to Vec for convenience, consider optimizing later
+    pub init_assignment: Vec<VarState>,
 }
