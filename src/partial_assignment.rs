@@ -15,6 +15,8 @@ pub struct PartialAssignment<'a> {
     /// Indices into the history that mark the start of each decision level.
     /// `decision_marks[i]` points to the index in `history` where the decision variable for level `i+1` is stored.
     decision_marks: Vec<usize>,
+    /// The number of currently assigned variables.
+    num_assigned: usize,
 }
 
 impl<'a> PartialAssignment<'a> {
@@ -22,9 +24,13 @@ impl<'a> PartialAssignment<'a> {
     /// The initial assignment will be treated as level 0 (no decisions made yet).
     pub fn with_assignment(initial_assignment: &'a mut [VarState]) -> Self {
         PartialAssignment {
-            current_state: initial_assignment,
             history: Vec::new(),
             decision_marks: Vec::new(),
+            num_assigned: initial_assignment
+                .iter()
+                .filter(|&state| state.is_assigned())
+                .count(),
+            current_state: initial_assignment,
         }
     }
 
@@ -48,6 +54,7 @@ impl<'a> PartialAssignment<'a> {
             var
         );
         self.current_state[var] = VarState::new_assigned(val);
+        self.num_assigned += 1;
         self.history.push(var);
     }
 
@@ -60,6 +67,7 @@ impl<'a> PartialAssignment<'a> {
 
         // Always try true first. If this leads to a conflict, we will backtrack and try false.
         self.current_state[var] = VarState::new_assigned(true);
+        self.num_assigned += 1;
         self.history.push(var);
     }
 
@@ -90,6 +98,7 @@ impl<'a> PartialAssignment<'a> {
                 // We tried both true and false with no success
                 // => All options at this level are exhausted. Try the next higher level.
                 self.current_state[decision_var] = VarState::new_unassigned();
+                self.num_assigned -= 1;
                 self.history.pop();
                 self.decision_marks.pop();
                 continue;
@@ -106,6 +115,7 @@ impl<'a> PartialAssignment<'a> {
         while self.history.len() > level_start + 1 {
             let var = self.history.pop().unwrap();
             self.current_state[var] = VarState::new_unassigned();
+            self.num_assigned -= 1;
         }
         *level_start
     }
@@ -143,6 +153,11 @@ impl<'a> PartialAssignment<'a> {
             assignment.len()
         );
         unsafe { *assignment.get_unchecked(var) }
+    }
+
+    /// Checks if all variables are assigned.
+    pub fn is_complete(&self) -> bool {
+        self.num_assigned == self.current_state.len()
     }
 }
 

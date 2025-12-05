@@ -1,6 +1,3 @@
-use stackvector::StackVec;
-use std::{iter::Cloned, slice::Iter};
-
 use crate::{
     clause::{ClauseState, Lit},
     constants::MAX_FALSIFIED_LITS,
@@ -8,6 +5,7 @@ use crate::{
     problem::Problem,
     utils::NonExhaustingCursor,
 };
+use stackvector::StackVec;
 
 pub struct DPLLSolver<'a> {
     problem: &'a Problem,
@@ -80,7 +78,9 @@ impl<'a> DPLLSolver<'a> {
         self.falsified_lits_buffer.clear();
         self.falsified_lits_buffer.push(falsified_lit);
 
-        // For each literal that was just falsified, check only the affected clauses.
+        // Propagate until no unit clauses are left.
+        // It's sufficient to only check clauses containing the just falsified literals,
+        // since only those clauses can become unit clauses or conflicts.
         while let Some(lit) = self.falsified_lits_buffer.pop() {
             'clauses: for clause in self.problem.clauses_containing_lit(lit) {
                 match clause.eval_with_partial(&self.assignment) {
@@ -109,9 +109,11 @@ impl<'a> DPLLSolver<'a> {
                 }
             }
         }
-        // All propagations done without conflicts.
 
-        return if self.all_clauses_satisfied() {
+        // No unit clauses left & we encountered no conflicts.
+        // If all variables are assigned => all clauses must be satisfied => SAT.
+        // Otherwise => Some clauses are still undecided.
+        return if self.assignment.is_complete() {
             PropagationResult::SAT
         } else {
             PropagationResult::Undecided
@@ -129,13 +131,6 @@ impl<'a> DPLLSolver<'a> {
         self.assignment.decide(decision_var);
         // Return the negated literal of the assigned decision variable
         return Lit::new(decision_var, true).negated();
-    }
-
-    fn all_clauses_satisfied(&self) -> bool {
-        self.problem
-            .clauses
-            .iter()
-            .all(|c| c.is_satisfied_by_partial(&self.assignment))
     }
 }
 
