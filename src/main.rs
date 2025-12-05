@@ -1,6 +1,6 @@
 use clap::Parser;
-use dpll::SolverPool;
 use dpll::parser::parse_dimacs_cnf;
+use dpll::pool::WorkerPool;
 use dpll::utils::human_duration;
 use memmap2::Mmap;
 use std::sync::Arc;
@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let total_start = Instant::now();
 
-    let pool = SolverPool::new(args.num_worker_threads);
+    let pool = WorkerPool::new(args.num_worker_threads);
     println!(
         "Initialized pool with {} worker thread(s).",
         pool.num_workers
@@ -82,7 +82,7 @@ fn solve_file(
     path: &Path,
     verify: bool,
     stats: &mut Stats,
-    pool: &SolverPool,
+    pool: &WorkerPool,
 ) -> Result<(), Box<dyn Error>> {
     println!("---\nProcessing file: {:?}\n---", &path);
     stats.processed += 1;
