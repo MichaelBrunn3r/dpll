@@ -93,6 +93,19 @@ impl Problem {
     }
 }
 
+impl Default for Problem {
+    fn default() -> Self {
+        Problem {
+            num_vars: 0,
+            clauses: Vec::new(),
+            var2clauses: Vec::new(),
+            lit2clauses: Vec::new(),
+            var_scores: Vec::new(),
+            vars_by_score: Vec::new(),
+        }
+    }
+}
+
 /// Identifier for a clause that is unique within a Problem.
 type ClauseID = usize;
 

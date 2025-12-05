@@ -4,7 +4,7 @@ use crate::{
 use itertools::Itertools;
 use std::{
     sync::{
-        Arc,
+        Arc, RwLock,
         atomic::{self, AtomicBool},
         mpsc,
     },
@@ -13,36 +13,51 @@ use std::{
 };
 
 pub struct WorkerPool {
-    job_sender: Option<crossbeam_channel::Sender<Job>>,
+    job_sender: Option<crossbeam_channel::Sender<Task>>,
     _workers: Vec<thread::JoinHandle<()>>,
+    shared_ctx: Arc<RwLock<SharedContext>>,
     pub num_workers: usize,
 }
 
 impl WorkerPool {
     pub fn new(num_workers: usize) -> Self {
+        // Limit number of workers to available parallelism
+        let num_workers = num_workers.min(available_parallelism().map(|n| n.get()).unwrap_or(1));
+
+        // Single-threaded mode
         if num_workers <= 1 {
             return Self {
                 job_sender: None,
                 _workers: Vec::new(),
+                shared_ctx: Arc::new(RwLock::new(SharedContext {
+                    current_pid: 0,
+                    problem_ctx: Arc::new(ProblemContext::default()),
+                })),
                 num_workers: 1,
             };
         }
-        // Limit number of workers to available parallelism
-        let num_workers = num_workers.min(available_parallelism().map(|n| n.get()).unwrap_or(1));
 
-        let (tx, job_receiver) = crossbeam_channel::unbounded::<Job>();
+        // Setup coordination utilities
+        let (task_sender, task_receiver) = crossbeam_channel::unbounded::<Task>();
+        let shared_ctx = Arc::new(RwLock::new(SharedContext {
+            current_pid: 0,
+            problem_ctx: Arc::new(ProblemContext::default()),
+        }));
+
+        // Spawn worker threads
         let mut workers = Vec::with_capacity(num_workers);
-
         for worker_id in 0..num_workers {
-            let job_receiver = job_receiver.clone();
+            let rx = task_receiver.clone();
+            let ctx = shared_ctx.clone();
             workers.push(thread::spawn(move || {
-                Worker::new(worker_id, job_receiver).run();
+                Worker::new(worker_id, rx, ctx).run();
             }));
         }
 
         Self {
-            job_sender: Some(tx),
+            job_sender: Some(task_sender),
             _workers: workers,
+            shared_ctx,
             num_workers,
         }
     }
@@ -57,8 +72,21 @@ impl WorkerPool {
             }
         };
 
+        // Notify all workers of the new problem
         let solution_found = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
+
+        let current_pid = {
+            let mut ctx_lock = self.shared_ctx.write().unwrap();
+            ctx_lock.current_pid += 1;
+
+            ctx_lock.problem_ctx = Arc::new(ProblemContext {
+                problem: Arc::clone(&problem),
+                solution_found_flag: Arc::clone(&solution_found),
+                sender: tx.clone(),
+            });
+            ctx_lock.current_pid
+        };
 
         let depth = Self::calculate_depth(self.num_workers, problem.num_vars);
         let split_vars = Arc::new(Self::select_split_vars(&problem, depth));
@@ -70,15 +98,11 @@ impl WorkerPool {
                 break;
             }
 
-            let job = Job {
-                problem: Arc::clone(&problem),
-                solution_found_flag: Arc::clone(&solution_found),
-                sender: tx.clone(),
-                init_assignment,
-            };
-
-            if job_sender.send(job).is_err() {
-                return None; // Failed to send job
+            if job_sender
+                .send(Task::new(current_pid, init_assignment))
+                .is_err()
+            {
+                return None;
             }
 
             active_jobs += 1;
@@ -93,8 +117,8 @@ impl WorkerPool {
         let mut completed_jobs = 0;
         while let Ok(result) = rx.recv() {
             match result {
-                JobResult::Found(solution) => return Some(solution),
-                JobResult::Done => {
+                WorkerResult::SAT(solution) => return Some(solution),
+                WorkerResult::UNSAT => {
                     completed_jobs += 1;
                     if completed_jobs == active_jobs {
                         return None; // All jobs completed, no solution found
@@ -162,18 +186,50 @@ impl WorkerPool {
     }
 }
 
-pub enum JobResult {
-    /// A solution was found for this job.
-    Found(Vec<bool>),
-    /// No solution found for this job.
-    Done,
+pub struct SharedContext {
+    pub current_pid: usize,
+    pub problem_ctx: Arc<ProblemContext>,
 }
 
-/// A job to be processed by a worker.
-pub struct Job {
+pub struct ProblemContext {
+    /// The problem to solve.
     pub problem: Arc<Problem>,
+    /// Flag indicating if a solution has been found.
     pub solution_found_flag: Arc<AtomicBool>,
-    pub sender: mpsc::Sender<JobResult>,
-    // TODO: Switched to Vec for convenience, consider optimizing later
+    /// Channel to send back job results.
+    pub sender: mpsc::Sender<WorkerResult>,
+}
+
+impl Default for ProblemContext {
+    fn default() -> Self {
+        Self {
+            problem: Arc::new(Problem::default()),
+            solution_found_flag: Arc::new(AtomicBool::new(false)),
+            sender: mpsc::channel().0,
+        }
+    }
+}
+
+pub struct Task {
+    /// The ID of the associated problem.
+    pub pid: usize,
+    /// The initial assignment for the sub-problem.
     pub init_assignment: Vec<OptBool>,
+}
+
+impl Task {
+    pub fn new(pid: usize, init_assignment: Vec<OptBool>) -> Self {
+        Self {
+            pid,
+            init_assignment,
+        }
+    }
+}
+
+/// Result sent back from workers when they complete a sub-problem.
+pub enum WorkerResult {
+    /// The sub-problem is satisfiable, with the given solution.
+    SAT(Vec<bool>),
+    /// The sub-problem is unsatisfiable.
+    UNSAT,
 }
