@@ -1,133 +1,56 @@
-// main.rs
-use clap::Parser;
-use dpll::parser::parse_dimacs_cnf;
-use dpll::pool::WorkerPool;
-use dpll::utils::human_duration;
-use dpll::{measure_time, record_time};
-use log::{error, info, warn};
-use memmap2::Mmap;
-use std::error::Error;
-use std::fs::File;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Instant;
-
-use crate::cli::Stats;
-
 pub mod cli;
+
+use clap::{Parser, Subcommand};
+use std::{error::Error, path::PathBuf};
+
+use crate::cli::{generate::generate, solve::solve};
 
 #[derive(Parser)]
 struct Args {
-    /// Path to a file or directory of DIMACS CNF problem instances
-    #[arg(value_name = "PATH")]
-    path: PathBuf,
-    /// Limit the number of problems to solve
-    #[arg(short = 'l', long = "limit", value_name = "LIMIT")]
-    limit: Option<usize>,
-    /// Validate solutions after solving
-    #[arg(long)]
-    validate: bool,
-    /// Number of worker threads to use (number or 'auto')
-    #[arg(short = 'w', long = "worker-threads", value_name = "N", default_value = "1", value_parser = cli::parse_num_worker_threads)]
-    num_worker_threads: usize,
-    /// Disable the progress bar
-    #[arg(long = "no-bar")]
-    no_progress_bar: bool,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    Solve {
+        /// Path to a file or directory of DIMACS CNF problem instances
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+        /// Limit the number of problems to solve
+        #[arg(short = 'l', long = "limit", value_name = "LIMIT")]
+        limit: Option<usize>,
+        /// Validate solutions after solving
+        #[arg(long)]
+        validate: bool,
+        /// Number of worker threads to use (number or 'auto')
+        #[arg(short = 'w', long = "worker-threads", value_name = "N", default_value = "1", value_parser = cli::parse_num_worker_threads)]
+        num_worker_threads: usize,
+        /// Disable the progress bar
+        #[arg(long = "no-bar")]
+        no_progress_bar: bool,
+    },
+    #[command(name = "generate")]
+    Generate { num_pigeons: usize },
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
-    let progress = cli::init_logging();
 
-    let start = Instant::now();
-    let pool = WorkerPool::new(args.num_worker_threads);
-    info!(
-        "Initialized pool with {} worker thread(s).",
-        pool.num_workers
-    );
-
-    let mut stats = Stats::new();
-    let mut queue = cli::get_problem_input_queue(&args.path, args.limit)?;
-
-    // Process the first file to estimate the remaining runtime
-    let first_file = if let Some(f) = queue.pop() {
-        f
-    } else {
-        return Ok(());
-    };
-    let first_duration = measure_time!({
-        solve_file(&first_file, &pool, &mut stats, args.validate).map_err(|e| {
-            error!("Error while solving {:?}: {}", first_file, e);
-            e
-        })?
-    });
-
-    if !queue.is_empty() {
-        // Create a progress bar if the remaining time is significant enough
-        let pb =
-            if !args.no_progress_bar && cli::should_use_progress_bar(queue.len(), first_duration) {
-                let pb = cli::create_progress_bar(&progress, queue.len());
-                pb.set_position(1); // Account for the first file we just solved
-                Some(pb)
-            } else {
-                None
-            };
-
-        // Process the remaining files
-        for path in queue {
-            if let Err(e) = solve_file(&path, &pool, &mut stats, args.validate) {
-                error!("Error while solving {:?}: {}", path, e);
-            }
-            pb.as_ref().map(|p| p.inc(1));
+    match args.command {
+        Command::Solve {
+            path,
+            limit,
+            validate,
+            num_worker_threads,
+            no_progress_bar,
+        } => {
+            solve(path, limit, validate, num_worker_threads, no_progress_bar)?;
         }
-        pb.as_ref().map(|p| p.finish_with_message("done"));
+        Command::Generate { num_pigeons: size } => {
+            generate(size)?;
+        }
     }
-
-    stats.print_summary();
-    info!("Total runtime: {}", human_duration(start.elapsed()));
 
     Ok(())
-}
-
-/// Solves a single DIMACS CNF file, updating stats and optionally verifying the solution.
-fn solve_file(
-    path: &Path,
-    pool: &WorkerPool,
-    stats: &mut Stats,
-    validate_solution: bool,
-) -> Result<Option<Vec<bool>>, Box<dyn Error>> {
-    info!("Solving {:?}", path);
-    stats.processed += 1;
-
-    // Parse the problem
-    let problem = {
-        let file = File::open(path)?;
-        let mmap = unsafe { Mmap::map(&file)? };
-
-        record_time!(stats.parse_durations, {
-            Arc::new(parse_dimacs_cnf(&mmap)?)
-        })
-    };
-
-    // Solve the problem
-    if let Some(solution) = record_time!(stats.solve_durations, { pool.submit(problem.clone()) }) {
-        stats.sat_count += 1;
-
-        // Validate the solution
-        if validate_solution {
-            if let Err(msg) = problem.verify_solution(&solution) {
-                warn!("Solution verification failed: {}", msg);
-                stats.failed_verifications += 1;
-            } else {
-                stats.verified_count += 1;
-            }
-        }
-
-        info!("SAT {}", cli::format_solution_string(&solution));
-        return Ok(Some(solution));
-    } else {
-        stats.unsat_count += 1;
-        info!("UNSAT");
-        return Ok(None);
-    }
 }

@@ -1,4 +1,6 @@
-// cli.rs
+pub mod generate;
+pub mod solve;
+
 use dpll::constants::PROGRESS_BAR_THRESHOLD;
 use dpll::utils::human_duration;
 use env_logger::Env;
