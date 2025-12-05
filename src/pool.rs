@@ -53,8 +53,7 @@ impl WorkerPool {
             None => {
                 // Single-threaded mode
                 let mut assignment_buffer = vec![VarState::new_unassigned(); problem.num_vars];
-                let mut solver = DPLLSolver::with_assignment(&problem, &mut assignment_buffer);
-                return solver.solve();
+                return DPLLSolver::with_assignment(&problem, &mut assignment_buffer).solve();
             }
         };
 

@@ -1,11 +1,12 @@
 use stackvector::StackVec;
-use std::sync::atomic::{self, AtomicBool};
+use std::{iter::Cloned, slice::Iter};
 
 use crate::{
     clause::{ClauseState, Lit},
     constants::MAX_FALSIFIED_LITS,
     partial_assignment::{PartialAssignment, VarState},
     problem::Problem,
+    utils::NonExhaustingCursor,
 };
 
 pub struct DPLLSolver<'a> {
@@ -13,8 +14,8 @@ pub struct DPLLSolver<'a> {
     pub assignment: PartialAssignment<'a>,
     /// Reusable buffer for literals that have just been falsified during unit propagation.
     falsified_lits_buffer: StackVec<[Lit; MAX_FALSIFIED_LITS]>,
-    /// Index to track the next candidate variable for branching decisions.
-    next_decision_candidate_idx: usize,
+    /// Cursor to keep track of which variable to consider next for branching decisions.
+    decision_candidate_cursor: NonExhaustingCursor,
 }
 
 impl<'a> DPLLSolver<'a> {
@@ -28,7 +29,7 @@ impl<'a> DPLLSolver<'a> {
             problem,
             assignment: PartialAssignment::with_assignment(initial_assignment),
             falsified_lits_buffer: StackVec::new(),
-            next_decision_candidate_idx: 0,
+            decision_candidate_cursor: NonExhaustingCursor::new(),
         }
     }
 
@@ -55,7 +56,7 @@ impl<'a> DPLLSolver<'a> {
                 return SolverAction::SAT;
             }
             PropagationResult::UNSAT => {
-                self.next_decision_candidate_idx = 0; // Reset decision candidate when backtracking
+                self.decision_candidate_cursor.reset();
                 match self.assignment.backtrack() {
                     None => {
                         // Cannot backtrack further => UNSAT
@@ -119,16 +120,11 @@ impl<'a> DPLLSolver<'a> {
 
     /// Makes a branching decision by selecting an unassigned variable and assigning it to true.
     pub fn make_branching_decision(&mut self) -> Lit {
-        let decision_var = match self.find_var_with_highest_score() {
-            Some(v) => v,
-            None => {
-                debug_assert!(
-                    false,
-                    "PropagationResult::Undecided implies some unassigned variable exists."
-                );
-                unreachable!()
-            }
-        };
+        let decision_var = *self
+            .decision_candidate_cursor
+            .next_match(&self.problem.vars_by_score, |&var| {
+                self.assignment[var].is_unassigned()
+            });
 
         self.assignment.decide(decision_var);
         // Return the negated literal of the assigned decision variable
@@ -140,18 +136,6 @@ impl<'a> DPLLSolver<'a> {
             .clauses
             .iter()
             .all(|c| c.is_satisfied_by_partial(&self.assignment))
-    }
-
-    fn find_var_with_highest_score(&mut self) -> Option<usize> {
-        for &var in &self.problem.vars_by_score[self.next_decision_candidate_idx..] {
-            self.next_decision_candidate_idx += 1;
-
-            if self.assignment[var].is_unassigned() {
-                return Some(var);
-            }
-        }
-
-        unreachable!("PropagationResult::Undecided implies some unassigned variable exists.")
     }
 }
 
