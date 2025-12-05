@@ -1,235 +1,133 @@
+// main.rs
 use clap::Parser;
 use dpll::parser::parse_dimacs_cnf;
 use dpll::pool::WorkerPool;
 use dpll::utils::human_duration;
+use dpll::{measure_time, record_time};
+use log::{error, info, warn};
 use memmap2::Mmap;
+use std::error::Error;
+use std::fs::File;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use std::{
-    error::Error,
-    fs,
-    fs::File,
-    path::{Path, PathBuf},
-};
+use std::time::Instant;
+
+use crate::cli::Stats;
 
 pub mod cli;
 
 #[derive(Parser)]
 struct Args {
+    /// Path to a file or directory of DIMACS CNF problem instances
     #[arg(value_name = "PATH")]
     path: PathBuf,
-    /// Limit to N files when processing a directory
+    /// Limit the number of problems to solve
     #[arg(short = 'l', long = "limit", value_name = "LIMIT")]
     limit: Option<usize>,
-    /// Verify the solution
+    /// Validate solutions after solving
     #[arg(long)]
-    verify: bool,
+    validate: bool,
     /// Number of worker threads to use (number or 'auto')
     #[arg(short = 'w', long = "worker-threads", value_name = "N", default_value = "1", value_parser = cli::parse_num_worker_threads)]
     num_worker_threads: usize,
+    /// Disable the progress bar
+    #[arg(long = "no-bar")]
+    no_progress_bar: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
+    let progress = cli::init_logging();
 
-    let total_start = Instant::now();
-
+    let start = Instant::now();
     let pool = WorkerPool::new(args.num_worker_threads);
-    println!(
+    info!(
         "Initialized pool with {} worker thread(s).",
         pool.num_workers
     );
 
-    let path = args.path;
-    let mut stats = &mut Stats::new();
+    let mut stats = Stats::new();
+    let mut queue = cli::get_problem_input_queue(&args.path, args.limit)?;
 
-    if path.is_dir() {
-        let mut entries: Vec<PathBuf> = fs::read_dir(&path)?
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .filter(|p| p.is_file())
-            .collect();
-        entries.sort();
-
-        if let Some(limit) = args.limit {
-            entries.truncate(limit);
-        }
-
-        for entry in entries {
-            println!();
-            match solve_file(&entry, args.verify, &mut stats, &pool) {
-                Err(e) => {
-                    stats.errors += 1;
-                    eprintln!("Error solving {:?}: {}", entry, e);
-                }
-                _ => {}
-            }
-        }
-    } else if path.is_file() {
-        solve_file(&path, args.verify, stats, &pool)?;
+    // Process the first file to estimate the remaining runtime
+    let first_file = if let Some(f) = queue.pop() {
+        f
     } else {
-        return Err(format!("Path {:?} is not a file or directory", path).into());
+        return Ok(());
+    };
+    let first_duration = measure_time!({
+        solve_file(&first_file, &pool, &mut stats, args.validate).map_err(|e| {
+            error!("Error while solving {:?}: {}", first_file, e);
+            e
+        })?
+    });
+
+    if !queue.is_empty() {
+        // Create a progress bar if the remaining time is significant enough
+        let pb =
+            if !args.no_progress_bar && cli::should_use_progress_bar(queue.len(), first_duration) {
+                let pb = cli::create_progress_bar(&progress, queue.len());
+                pb.set_position(1); // Account for the first file we just solved
+                Some(pb)
+            } else {
+                None
+            };
+
+        // Process the remaining files
+        for path in queue {
+            if let Err(e) = solve_file(&path, &pool, &mut stats, args.validate) {
+                error!("Error while solving {:?}: {}", path, e);
+            }
+            pb.as_ref().map(|p| p.inc(1));
+        }
+        pb.as_ref().map(|p| p.finish_with_message("done"));
     }
 
     stats.print_summary();
+    info!("Total runtime: {}", human_duration(start.elapsed()));
 
-    let total_elapsed = total_start.elapsed();
-    println!("\nTotal runtime: {}", human_duration(total_elapsed));
     Ok(())
 }
 
+/// Solves a single DIMACS CNF file, updating stats and optionally verifying the solution.
 fn solve_file(
     path: &Path,
-    verify: bool,
-    stats: &mut Stats,
     pool: &WorkerPool,
-) -> Result<(), Box<dyn Error>> {
-    println!("---\nProcessing file: {:?}\n---", &path);
+    stats: &mut Stats,
+    validate_solution: bool,
+) -> Result<Option<Vec<bool>>, Box<dyn Error>> {
+    info!("Solving {:?}", path);
     stats.processed += 1;
-    let start = Instant::now();
 
+    // Parse the problem
     let problem = {
         let file = File::open(path)?;
-        // SAFETY: mapping a file is safe as long as the file isn't modified concurrently.
         let mmap = unsafe { Mmap::map(&file)? };
 
-        let parse_start = Instant::now();
-        let problem = parse_dimacs_cnf(&mmap)?;
-        let parse_elapsed = parse_start.elapsed();
-        stats.parse_durations.push(parse_elapsed);
-        Arc::new(problem)
+        record_time!(stats.parse_durations, {
+            Arc::new(parse_dimacs_cnf(&mmap)?)
+        })
     };
-    println!(
-        "Problem: {} variables, {} clauses",
-        problem.num_vars,
-        problem.clauses.len()
-    );
 
-    let solve_start = Instant::now();
+    // Solve the problem
+    if let Some(solution) = record_time!(stats.solve_durations, { pool.submit(problem.clone()) }) {
+        stats.sat_count += 1;
 
-    match pool.submit(problem.clone()) {
-        Some(solution) => {
-            stats.sat_count += 1;
-            let solve_elapsed = solve_start.elapsed();
-            let total_elapsed = start.elapsed();
-            stats.solve_durations.push(solve_elapsed);
-            stats.durations.push(total_elapsed);
-
-            print!("SAT! ");
-            for (i, val) in solution.iter().enumerate() {
-                if *val {
-                    print!("{} ", i + 1);
-                } else {
-                    print!("¬{} ", i + 1);
-                }
+        // Validate the solution
+        if validate_solution {
+            if let Err(msg) = problem.verify_solution(&solution) {
+                warn!("Solution verification failed: {}", msg);
+                stats.failed_verifications += 1;
+            } else {
+                stats.verified_count += 1;
             }
-
-            if verify {
-                match problem.verify_solution(&solution) {
-                    Ok(()) => {
-                        print!("OK");
-                        stats.verified_count += 1;
-                    }
-                    Err(msg) => {
-                        print!("FAIL {} ", msg);
-                        stats.failed_verifications += 1;
-                    }
-                };
-            }
-
-            println!();
-        }
-        None => {
-            stats.unsat_count += 1;
-            let solve_elapsed = solve_start.elapsed();
-            let total_elapsed = start.elapsed();
-            stats.solve_durations.push(solve_elapsed);
-            stats.durations.push(total_elapsed);
-            println!("UNSAT");
-        }
-    }
-
-    Ok(())
-}
-
-/// Aggregated statistics for a directory run.
-struct Stats {
-    processed: usize,
-    errors: usize,
-    sat_count: usize,
-    unsat_count: usize,
-    durations: Vec<Duration>,
-    parse_durations: Vec<Duration>,
-    solve_durations: Vec<Duration>,
-    verified_count: usize,
-    failed_verifications: usize,
-}
-
-impl Stats {
-    fn new() -> Self {
-        Self {
-            processed: 0,
-            errors: 0,
-            sat_count: 0,
-            unsat_count: 0,
-            durations: Vec::new(),
-            parse_durations: Vec::new(),
-            solve_durations: Vec::new(),
-            verified_count: 0,
-            failed_verifications: 0,
-        }
-    }
-
-    fn print_summary(&self) {
-        println!("\n---\nSummary:");
-
-        if self.verified_count > 0 || self.failed_verifications > 0 {
-            println!(
-                "#Files  | SAT/UNSAT/Verified | ERR\n{:<7} | {:^18} | {:^3}",
-                self.processed,
-                format!(
-                    "{}/{}/{}",
-                    self.sat_count, self.unsat_count, self.verified_count
-                ),
-                self.errors
-            );
-        } else {
-            println!(
-                "#Files  | SAT/UNSAT | ERR\n{:<7} | {:^9} | {:^3}",
-                self.processed,
-                format!("{}/{}", self.sat_count, self.unsat_count),
-                self.errors
-            );
         }
 
-        self.print_times_table("Parsing times:", &self.parse_durations);
-        self.print_times_table("Solving times:", &self.solve_durations);
-    }
-
-    fn print_times_table(&self, title: &str, durations: &Vec<Duration>) {
-        if durations.is_empty() {
-            return;
-        }
-        let total_secs: f64 = durations.iter().map(|d| d.as_secs_f64()).sum();
-        let avg_secs = total_secs / (durations.len() as f64);
-        let mut secs_vec: Vec<f64> = durations.iter().map(|d| d.as_secs_f64()).collect();
-        secs_vec.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let min = secs_vec.first().cloned().unwrap_or(0.0);
-        let max = secs_vec.last().cloned().unwrap_or(0.0);
-        let median = if secs_vec.len() % 2 == 1 {
-            secs_vec[secs_vec.len() / 2]
-        } else {
-            let hi = secs_vec.len() / 2;
-            (secs_vec[hi - 1] + secs_vec[hi]) / 2.0
-        };
-        println!(
-            "\n{}\ntotal   |   min   | median  |   avg   |  max   \n{:<7} | {:^7} | {:^7} | {:^7} | {:^7}",
-            title,
-            human_duration(Duration::from_secs_f64(total_secs)),
-            human_duration(Duration::from_secs_f64(min)),
-            human_duration(Duration::from_secs_f64(median)),
-            human_duration(Duration::from_secs_f64(avg_secs)),
-            human_duration(Duration::from_secs_f64(max)),
-        );
+        info!("SAT {}", cli::format_solution_string(&solution));
+        return Ok(Some(solution));
+    } else {
+        stats.unsat_count += 1;
+        info!("UNSAT");
+        return Ok(None);
     }
 }

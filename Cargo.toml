@@ -8,7 +8,11 @@ edition = "2024"
 [dependencies]
 clap = { version = "4.5.53", features = ["derive"] }
 crossbeam-channel = "0.5.15"
+env_logger = "0.11.8"
+indicatif = { version = "0.18.3", features = ["improved_unicode"] }
+indicatif-log-bridge = "0.2.3"
 itertools = "0.14.0"
+log = "0.4.28"
 memmap2 = "0.9.9"
 stackvector = "1.1.0"
 
