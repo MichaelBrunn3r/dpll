@@ -1,9 +1,9 @@
 use crate::{
     clause::{ClauseState, Lit},
     constants::MAX_FALSIFIED_LITS,
-    partial_assignment::{PartialAssignment, VarState},
+    partial_assignment::PartialAssignment,
     problem::Problem,
-    utils::NonExhaustingCursor,
+    utils::{NonExhaustingCursor, opt_bool::OptBool},
 };
 use stackvector::StackVec;
 
@@ -17,7 +17,7 @@ pub struct DPLLSolver<'a> {
 }
 
 impl<'a> DPLLSolver<'a> {
-    pub fn with_assignment(problem: &'a Problem, initial_assignment: &'a mut [VarState]) -> Self {
+    pub fn with_assignment(problem: &'a Problem, initial_assignment: &'a mut [OptBool]) -> Self {
         debug_assert!(
             initial_assignment.len() == problem.num_vars,
             "Initial assignment length must match number of variables."
@@ -91,7 +91,7 @@ impl<'a> DPLLSolver<'a> {
                     ClauseState::Undecided(_) => continue 'clauses, // continue checking for conflicts and unit clauses
                     ClauseState::Unit(unit_literal) => {
                         let var = unit_literal.var();
-                        if self.assignment[var].is_assigned() {
+                        if self.assignment[var].is_some() {
                             // Check if the variable is already assigned the opposite value
                             if !self.assignment[var].is_bool(unit_literal.is_pos()) {
                                 return PropagationResult::UNSAT; // Conflict => backtrack
@@ -125,7 +125,7 @@ impl<'a> DPLLSolver<'a> {
         let decision_var = *self
             .decision_candidate_cursor
             .next_match(&self.problem.vars_by_score, |&var| {
-                self.assignment[var].is_unassigned()
+                self.assignment[var].is_none()
             });
 
         self.assignment.decide(decision_var);

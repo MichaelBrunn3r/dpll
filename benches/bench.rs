@@ -1,9 +1,8 @@
+use std::fs;
 use std::hint::black_box;
-use std::{fs, sync::atomic::AtomicBool};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use dpll::dpll::DPLLSolver;
-use dpll::partial_assignment::VarState;
+use dpll::{dpll::DPLLSolver, utils::opt_bool::OptBool};
 
 fn bench_parse_dimacs(c: &mut Criterion) {
     let data = fs::read("./benches/uf100-01.cnf").expect("failed to read fixture");
@@ -18,14 +17,14 @@ fn bench_parse_dimacs(c: &mut Criterion) {
 fn bench_solve(c: &mut Criterion) {
     let data = fs::read("./benches/uf100-01.cnf").expect("failed to read fixture");
     let problem = dpll::parser::parse_dimacs_cnf(&data).expect("failed to parse fixture");
-    let mut assignment_buffer = vec![VarState::new_unassigned(); problem.num_vars];
+    let mut assignment_buffer = vec![OptBool::Unassigned; problem.num_vars];
 
     c.bench_function("solve", |b| {
         b.iter(|| {
-            assignment_buffer.fill(VarState::new_unassigned());
+            assignment_buffer.fill(OptBool::Unassigned);
             let mut solver =
                 DPLLSolver::with_assignment(black_box(&problem), &mut assignment_buffer);
-            let _ = solver.solve(&AtomicBool::new(false));
+            let _ = solver.solve();
         })
     });
 }

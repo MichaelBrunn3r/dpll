@@ -1,5 +1,5 @@
 use crate::{
-    dpll::DPLLSolver, generator, partial_assignment::VarState, problem::Problem, worker::Worker,
+    dpll::DPLLSolver, generator, problem::Problem, utils::opt_bool::OptBool, worker::Worker,
 };
 use itertools::Itertools;
 use std::{
@@ -52,7 +52,7 @@ impl WorkerPool {
             Some(tx) => tx,
             None => {
                 // Single-threaded mode
-                let mut assignment_buffer = vec![VarState::new_unassigned(); problem.num_vars];
+                let mut assignment_buffer = vec![OptBool::Unassigned; problem.num_vars];
                 return DPLLSolver::with_assignment(&problem, &mut assignment_buffer).solve();
             }
         };
@@ -129,7 +129,7 @@ impl WorkerPool {
     fn generate_combinations<'p>(
         problem: &'p Problem,
         split_vars: &'p Vec<usize>,
-    ) -> impl Iterator<Item = Vec<VarState>> + 'p {
+    ) -> impl Iterator<Item = Vec<OptBool>> + 'p {
         let clauses_containing_split_vars = split_vars
             .iter()
             .flat_map(|&var| problem.clauses_containing_var(var))
@@ -141,11 +141,11 @@ impl WorkerPool {
 
         generator!(move || {
             for combination in 0..combinations {
-                let mut assignment = vec![VarState::new_unassigned(); num_vars];
+                let mut assignment = vec![OptBool::Unassigned; num_vars];
 
                 for (bit_idx, &var) in split_vars.iter().enumerate() {
                     let val = (combination & (1 << bit_idx)) != 0;
-                    assignment[var] = VarState::new_assigned(val);
+                    assignment[var] = OptBool::from(val);
                 }
 
                 // Check if any clause containing split vars is unsatisfied
@@ -175,5 +175,5 @@ pub struct Job {
     pub solution_found_flag: Arc<AtomicBool>,
     pub sender: mpsc::Sender<JobResult>,
     // TODO: Switched to Vec for convenience, consider optimizing later
-    pub init_assignment: Vec<VarState>,
+    pub init_assignment: Vec<OptBool>,
 }

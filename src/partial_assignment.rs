@@ -1,4 +1,7 @@
-use crate::{clause::Lit, clause::VariableId};
+use crate::{
+    clause::{Lit, VariableId},
+    utils::opt_bool::OptBool,
+};
 use std::ops::{Deref, Index};
 
 /// Manages the partial assignment of variables during the DPLL solving process.
@@ -6,7 +9,7 @@ use std::ops::{Deref, Index};
 pub struct PartialAssignment<'a> {
     /// The current partial assignment for all variables.
     /// None=unassigned, Some(bool)=assigned to true/false.
-    current_state: &'a mut [VarState],
+    current_state: &'a mut [OptBool],
 
     /// A chronological stack of all variable assignments (decisions & unit propagations).
     /// Used to undo assignments during backtracking.
@@ -22,13 +25,13 @@ pub struct PartialAssignment<'a> {
 impl<'a> PartialAssignment<'a> {
     /// Creates a new Assignment state with the given initial assignment.
     /// The initial assignment will be treated as level 0 (no decisions made yet).
-    pub fn with_assignment(initial_assignment: &'a mut [VarState]) -> Self {
+    pub fn with_assignment(initial_assignment: &'a mut [OptBool]) -> Self {
         PartialAssignment {
             history: Vec::new(),
             decision_marks: Vec::new(),
             num_assigned: initial_assignment
                 .iter()
-                .filter(|&state| state.is_assigned())
+                .filter(|&state| state.is_some())
                 .count(),
             current_state: initial_assignment,
         }
@@ -42,31 +45,31 @@ impl<'a> PartialAssignment<'a> {
     /// Check if a variable is assigned.
     #[inline(always)]
     pub fn is_assigned(&self, var: VariableId) -> bool {
-        self.current_state[var].is_assigned()
+        self.current_state[var].is_some()
     }
 
     /// Assign a variable during Unit Propagation.
     /// Assumes the variable is unassigned.
     pub fn propagate(&mut self, var: VariableId, val: bool) {
         debug_assert!(
-            self.current_state[var].is_unassigned(),
+            self.current_state[var].is_none(),
             "Trying to propagate the already assigned variable {}.",
             var
         );
-        self.current_state[var] = VarState::new_assigned(val);
+        self.current_state[var] = OptBool::from(val);
         self.num_assigned += 1;
         self.history.push(var);
     }
 
     /// Starts a new decision level by assigning a chosen variable to `true`.
     pub fn decide(&mut self, var: VariableId) {
-        debug_assert!(self.current_state[var].is_unassigned());
+        debug_assert!(self.current_state[var].is_none());
 
         // Mark the start of this new decision level.
         self.decision_marks.push(self.history.len());
 
         // Always try true first. If this leads to a conflict, we will backtrack and try false.
-        self.current_state[var] = VarState::new_assigned(true);
+        self.current_state[var] = OptBool::True;
         self.num_assigned += 1;
         self.history.push(var);
     }
@@ -92,12 +95,12 @@ impl<'a> PartialAssignment<'a> {
 
             if self.current_state[decision_var].is_true() {
                 // We tried true without success => try false next.
-                self.current_state[decision_var] = VarState::new_assigned(false);
+                self.current_state[decision_var] = OptBool::False;
                 return Some(Lit::new(decision_var, true));
             } else {
                 // We tried both true and false with no success
                 // => All options at this level are exhausted. Try the next higher level.
-                self.current_state[decision_var] = VarState::new_unassigned();
+                self.current_state[decision_var] = OptBool::Unassigned;
                 self.num_assigned -= 1;
                 self.history.pop();
                 self.decision_marks.pop();
@@ -114,7 +117,7 @@ impl<'a> PartialAssignment<'a> {
         // Pop everything after the decision variable
         while self.history.len() > level_start + 1 {
             let var = self.history.pop().unwrap();
-            self.current_state[var] = VarState::new_unassigned();
+            self.current_state[var] = OptBool::Unassigned;
             self.num_assigned -= 1;
         }
         *level_start
@@ -126,10 +129,10 @@ impl<'a> PartialAssignment<'a> {
         Self::assignment_to_solution(&self.current_state)
     }
 
-    pub fn assignment_to_solution(assignment: &[VarState]) -> Vec<bool> {
+    pub fn assignment_to_solution(assignment: &[OptBool]) -> Vec<bool> {
         assignment
             .iter()
-            .map(|&var| var.get_value_or(false)) // Default unassigned variables to false
+            .map(|&var| var.unwrap_or(false)) // Default unassigned variables to false
             .collect()
     }
 
@@ -137,15 +140,15 @@ impl<'a> PartialAssignment<'a> {
     /// # Safety
     /// The caller must ensure that `var` is a valid index into the current assignment.
     #[inline(always)]
-    pub fn get_unchecked(&self, var: VariableId) -> VarState {
+    pub fn get_unchecked(&self, var: VariableId) -> OptBool {
         Self::get_unchecked_from(&self.current_state, var)
     }
 
-    /// Gets the VarState for the given variable from the provided assignment slice without bounds checking.
+    /// Gets the OptBool for the given variable from the provided assignment slice without bounds checking.
     /// # Safety
     /// The caller must ensure that `var` is a valid index into `assignment`.
     #[inline(always)]
-    pub fn get_unchecked_from(assignment: &[VarState], var: VariableId) -> VarState {
+    pub fn get_unchecked_from(assignment: &[OptBool], var: VariableId) -> OptBool {
         debug_assert!(
             var < assignment.len(),
             "Variable {} out of bounds for assignment of length {}.",
@@ -162,7 +165,7 @@ impl<'a> PartialAssignment<'a> {
 }
 
 impl<'a> Index<usize> for PartialAssignment<'a> {
-    type Output = VarState;
+    type Output = OptBool;
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.current_state[index]
@@ -170,70 +173,9 @@ impl<'a> Index<usize> for PartialAssignment<'a> {
 }
 
 impl<'a> Deref for PartialAssignment<'a> {
-    type Target = [VarState];
+    type Target = [OptBool];
 
     fn deref(&self) -> &Self::Target {
         &self.current_state
-    }
-}
-
-/// Represents the state of a variable in a partial assignment.
-/// Can be unassigned, assigned to true, or assigned to false.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(transparent)] // Ensure VarState has the same memory layout as u8
-pub struct VarState(u8);
-
-impl VarState {
-    const FALSE: u8 = 0;
-    const TRUE: u8 = 1;
-    const UNASSIGNED: u8 = 0xFF;
-
-    #[inline(always)]
-    pub fn new_unassigned() -> Self {
-        Self(Self::UNASSIGNED)
-    }
-
-    #[inline(always)]
-    pub fn new_assigned(val: bool) -> Self {
-        Self(if val { Self::TRUE } else { Self::FALSE })
-    }
-
-    #[inline(always)]
-    pub fn is_assigned(self) -> bool {
-        self.0 != Self::UNASSIGNED
-    }
-
-    #[inline(always)]
-    pub fn is_unassigned(self) -> bool {
-        self.0 == Self::UNASSIGNED
-    }
-
-    /// Returns the assigned boolean value, or the given default if unassigned.
-    #[inline(always)]
-    pub fn get_value_or(self, default: bool) -> bool {
-        match self.0 {
-            Self::TRUE => true,
-            Self::FALSE => false,
-            Self::UNASSIGNED => default,
-            _ => unreachable!(),
-        }
-    }
-
-    #[inline(always)]
-    pub fn is_true(self) -> bool {
-        self.0 == Self::TRUE
-    }
-
-    /// Checks if the variable is assigned to the given boolean value.
-    /// Returns false if unassigned or assigned to the opposite value.
-    #[inline(always)]
-    pub fn is_bool(self, val: bool) -> bool {
-        self.0 == (val as u8)
-    }
-}
-
-impl Default for VarState {
-    fn default() -> Self {
-        Self::new_unassigned()
     }
 }

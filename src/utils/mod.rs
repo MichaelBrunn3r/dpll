@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+pub mod opt_bool;
+
 pub fn human_duration(duration: Duration) -> String {
     let total_secs = duration.as_secs_f64();
     if total_secs < 0.000_001 {

@@ -9,6 +9,7 @@ edition = "2024"
 clap = { version = "4.5.53", features = ["derive"] }
 crossbeam-channel = "0.5.15"
 env_logger = "0.11.8"
+fastrand = "2.3.0"
 indicatif = { version = "0.18.3", features = ["improved_unicode"] }
 indicatif-log-bridge = "0.2.3"
 itertools = "0.14.0"
@@ -21,6 +22,14 @@ criterion = "0.8.0"
 
 [[bench]]
 name = "bench"
+harness = false
+
+[[bench]]
+name = "optbool_from"
+harness = false
+
+[[bench]]
+name = "optbool_unwrap_or"
 harness = false
 
 [profile.perf]

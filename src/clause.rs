@@ -1,6 +1,5 @@
 use crate::{
-    constants::MAX_LITS_PER_CLAUSE,
-    partial_assignment::{PartialAssignment, VarState},
+    constants::MAX_LITS_PER_CLAUSE, partial_assignment::PartialAssignment, utils::opt_bool::OptBool,
 };
 use stackvector::StackVec;
 use std::ops::{Deref, DerefMut};
@@ -32,7 +31,7 @@ impl Clause {
     }
 
     /// Checks if the clause is unsatisfied by the given partial assignment.
-    pub fn is_unsatisfied_by_partial(&self, part_assignment: &[VarState]) -> bool {
+    pub fn is_unsatisfied_by_partial(&self, part_assignment: &[OptBool]) -> bool {
         self.0.iter().all(|&lit| {
             let var_state = PartialAssignment::get_unchecked_from(part_assignment, lit.var());
             var_state.is_bool(!lit.is_pos())
@@ -57,7 +56,7 @@ impl Clause {
 
             if var_state.is_bool(lit.is_pos()) {
                 return ClauseState::Satisfied;
-            } else if var_state.is_unassigned() {
+            } else if var_state.is_none() {
                 unassigned_count += 1;
                 unit_lit = lit;
             }
