@@ -10,7 +10,7 @@ use crate::{
 
 pub struct DPLLSolver<'a> {
     problem: &'a Problem,
-    assignment: PartialAssignment<'a>,
+    pub assignment: PartialAssignment<'a>,
     /// Reusable buffer for literals that have just been falsified during unit propagation.
     falsified_lits_buffer: StackVec<[Lit; MAX_FALSIFIED_LITS]>,
     /// Index to track the next candidate variable for branching decisions.
@@ -32,35 +32,44 @@ impl<'a> DPLLSolver<'a> {
         }
     }
 
-    pub fn solve(&mut self, abort_flag: &AtomicBool) -> Option<Vec<bool>> {
-        let mut next_falsified_lit = self.make_branching_decision();
-
-        'backtrack: loop {
-            if abort_flag.load(atomic::Ordering::Relaxed) {
-                return None;
-            }
-
-            match self.propagate_units(next_falsified_lit) {
-                PropagationResult::Satisfied => {
+    pub fn solve(&mut self) -> Option<Vec<bool>> {
+        let mut falsified_lit = self.make_branching_decision();
+        loop {
+            match self.step(falsified_lit) {
+                SolverAction::SAT => {
                     return Some(self.assignment.to_solution());
                 }
-                PropagationResult::Unsatisfied => {
-                    self.next_decision_candidate_idx = 0; // Reset decision candidate when backtracking
-                    match self.assignment.backtrack() {
-                        None => {
-                            return None; // Cannot backtrack further => UNSAT
-                        }
-                        Some(falsified_lit) => {
-                            next_falsified_lit = falsified_lit;
-                        }
+                SolverAction::UNSAT => {
+                    return None;
+                }
+                SolverAction::Continue(next_falsified_lit) => {
+                    falsified_lit = next_falsified_lit;
+                }
+            }
+        }
+    }
+
+    pub fn step(&mut self, next_falsified_lit: Lit) -> SolverAction {
+        match self.propagate_units(next_falsified_lit) {
+            PropagationResult::SAT => {
+                return SolverAction::SAT;
+            }
+            PropagationResult::UNSAT => {
+                self.next_decision_candidate_idx = 0; // Reset decision candidate when backtracking
+                match self.assignment.backtrack() {
+                    None => {
+                        // Cannot backtrack further => UNSAT
+                        return SolverAction::UNSAT;
                     }
-                    continue 'backtrack;
+                    Some(falsified_lit) => {
+                        return SolverAction::Continue(falsified_lit);
+                    }
                 }
-                PropagationResult::Undecided => {
-                    // No conflicts & not all clauses satisfied => some clauses are still undecided
-                    // Make the next branching decision
-                    next_falsified_lit = self.make_branching_decision();
-                }
+            }
+            PropagationResult::Undecided => {
+                // No conflicts & not all clauses satisfied => some clauses are still undecided
+                // Make the next branching decision
+                return SolverAction::Continue(self.make_branching_decision());
             }
         }
     }
@@ -76,7 +85,7 @@ impl<'a> DPLLSolver<'a> {
                 match clause.eval_with_partial(&self.assignment) {
                     ClauseState::Satisfied => continue 'clauses, // 1 clause satisfied => check next
                     ClauseState::Unsatisfied => {
-                        return PropagationResult::Unsatisfied; // Conflict => backtrack
+                        return PropagationResult::UNSAT; // Conflict => backtrack
                     }
                     ClauseState::Undecided(_) => continue 'clauses, // continue checking for conflicts and unit clauses
                     ClauseState::Unit(unit_literal) => {
@@ -84,7 +93,7 @@ impl<'a> DPLLSolver<'a> {
                         if self.assignment[var].is_assigned() {
                             // Check if the variable is already assigned the opposite value
                             if !self.assignment[var].is_bool(unit_literal.is_pos()) {
-                                return PropagationResult::Unsatisfied; // Conflict => backtrack
+                                return PropagationResult::UNSAT; // Conflict => backtrack
                             }
                             // Variable already assigned correctly, no action needed
                         } else {
@@ -102,14 +111,14 @@ impl<'a> DPLLSolver<'a> {
         // All propagations done without conflicts.
 
         return if self.all_clauses_satisfied() {
-            PropagationResult::Satisfied
+            PropagationResult::SAT
         } else {
             PropagationResult::Undecided
         };
     }
 
     /// Makes a branching decision by selecting an unassigned variable and assigning it to true.
-    fn make_branching_decision(&mut self) -> Lit {
+    pub fn make_branching_decision(&mut self) -> Lit {
         let decision_var = match self.find_var_with_highest_score() {
             Some(v) => v,
             None => {
@@ -147,7 +156,13 @@ impl<'a> DPLLSolver<'a> {
 }
 
 enum PropagationResult {
-    Satisfied,
-    Unsatisfied,
+    SAT,
+    UNSAT,
     Undecided,
+}
+
+pub enum SolverAction {
+    SAT,
+    UNSAT,
+    Continue(Lit),
 }
