@@ -8,6 +8,7 @@ edition = "2024"
 [dependencies]
 clap = { version = "4.5.53", features = ["derive"] }
 crossbeam-channel = "0.5.15"
+crossbeam-deque = "0.8.6"
 env_logger = "0.11.8"
 fastrand = "2.3.0"
 indicatif = { version = "0.18.3", features = ["improved_unicode"] }

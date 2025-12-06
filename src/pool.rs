@@ -1,5 +1,6 @@
 use crate::{
-    dpll::DPLLSolver, generator, problem::Problem, utils::opt_bool::OptBool, worker::Worker,
+    clause::VariableId, dpll::DPLLSolver, generator, problem::Problem, utils::opt_bool::OptBool,
+    worker::Worker,
 };
 use itertools::Itertools;
 use std::{
@@ -13,7 +14,7 @@ use std::{
 };
 
 pub struct WorkerPool {
-    job_sender: Option<crossbeam_channel::Sender<Task>>,
+    job_sender: Option<crossbeam_channel::Sender<SubProblem>>,
     _workers: Vec<thread::JoinHandle<()>>,
     shared_ctx: Arc<RwLock<SharedContext>>,
     pub num_workers: usize,
@@ -38,19 +39,38 @@ impl WorkerPool {
         }
 
         // Setup coordination utilities
-        let (task_sender, task_receiver) = crossbeam_channel::unbounded::<Task>();
+        let (task_sender, task_receiver) = crossbeam_channel::unbounded::<SubProblem>();
         let shared_ctx = Arc::new(RwLock::new(SharedContext {
             current_pid: 0,
             problem_ctx: Arc::new(ProblemContext::default()),
         }));
+
+        // Create local queues and stealers from those queues
+        let mut local_queues = Vec::with_capacity(num_workers);
+        let mut all_stealers = Vec::with_capacity(num_workers);
+        for _ in 0..num_workers {
+            let local_queue = crossbeam_deque::Worker::new_lifo();
+            all_stealers.push(local_queue.stealer());
+            local_queues.push(local_queue);
+        }
 
         // Spawn worker threads
         let mut workers = Vec::with_capacity(num_workers);
         for worker_id in 0..num_workers {
             let rx = task_receiver.clone();
             let ctx = shared_ctx.clone();
+            let local_queue = local_queues.remove(0);
+
+            // Give worker stealers for all OTHER workers' queues
+            let peer_queues = all_stealers
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != worker_id)
+                .map(|(_, stealer)| stealer.clone())
+                .collect();
+
             workers.push(thread::spawn(move || {
-                Worker::new(worker_id, rx, ctx).run();
+                Worker::new(worker_id, rx, ctx, local_queue, peer_queues).run();
             }));
         }
 
@@ -68,7 +88,7 @@ impl WorkerPool {
             None => {
                 // Single-threaded mode
                 let mut assignment_buffer = vec![OptBool::Unassigned; problem.num_vars];
-                return DPLLSolver::with_assignment(&problem, &mut assignment_buffer).solve();
+                return DPLLSolver::with_assignment(&problem, &mut assignment_buffer, 0).solve();
             }
         };
 
@@ -99,7 +119,7 @@ impl WorkerPool {
             }
 
             if job_sender
-                .send(Task::new(current_pid, init_assignment))
+                .send(SubProblem::new(current_pid, init_assignment))
                 .is_err()
             {
                 return None;
@@ -210,14 +230,14 @@ impl Default for ProblemContext {
     }
 }
 
-pub struct Task {
+pub struct SubProblem {
     /// The ID of the associated problem.
     pub pid: usize,
     /// The initial assignment for the sub-problem.
     pub init_assignment: Vec<OptBool>,
 }
 
-impl Task {
+impl SubProblem {
     pub fn new(pid: usize, init_assignment: Vec<OptBool>) -> Self {
         Self {
             pid,
@@ -232,4 +252,17 @@ pub enum WorkerResult {
     SAT(Vec<bool>),
     /// The sub-problem is unsatisfiable.
     UNSAT,
+}
+
+/// A sequence of variable assignment decisions made during search.
+/// Can be stolen by idle workers and helps them reconstruct search states.
+pub struct DecisionPath {
+    /// The sequence of variable assignments (variable ID and assigned value).
+    pub decisions: Vec<(VariableId, bool)>,
+}
+
+impl From<Vec<(VariableId, bool)>> for DecisionPath {
+    fn from(decisions: Vec<(VariableId, bool)>) -> Self {
+        Self { decisions }
+    }
 }

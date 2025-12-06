@@ -17,7 +17,11 @@ pub struct DPLLSolver<'a> {
 }
 
 impl<'a> DPLLSolver<'a> {
-    pub fn with_assignment(problem: &'a Problem, initial_assignment: &'a mut [OptBool]) -> Self {
+    pub fn with_assignment(
+        problem: &'a Problem,
+        initial_assignment: &'a mut [OptBool],
+        initial_decision_level: usize,
+    ) -> Self {
         debug_assert!(
             initial_assignment.len() == problem.num_vars,
             "Initial assignment length must match number of variables."
@@ -25,7 +29,10 @@ impl<'a> DPLLSolver<'a> {
 
         DPLLSolver {
             problem,
-            assignment: PartialAssignment::with_assignment(initial_assignment),
+            assignment: PartialAssignment::with_assignment(
+                initial_assignment,
+                initial_decision_level,
+            ),
             falsified_lits_buffer: StackVec::new(),
             decision_candidate_cursor: NonExhaustingCursor::new(),
         }
@@ -38,11 +45,19 @@ impl<'a> DPLLSolver<'a> {
                 SolverAction::SAT => {
                     return Some(self.assignment.to_solution());
                 }
-                SolverAction::UNSAT => {
-                    return None;
-                }
-                SolverAction::Continue(next_falsified_lit) => {
+                SolverAction::Decision(next_falsified_lit) => {
                     falsified_lit = next_falsified_lit;
+                }
+                SolverAction::Backtrack => {
+                    match self.assignment.backtrack() {
+                        None => {
+                            // Cannot backtrack further => UNSAT
+                            return None;
+                        }
+                        Some(new_falsified_lit) => {
+                            falsified_lit = new_falsified_lit;
+                        }
+                    }
                 }
             }
         }
@@ -55,20 +70,12 @@ impl<'a> DPLLSolver<'a> {
             }
             PropagationResult::UNSAT => {
                 self.decision_candidate_cursor.reset();
-                match self.assignment.backtrack() {
-                    None => {
-                        // Cannot backtrack further => UNSAT
-                        return SolverAction::UNSAT;
-                    }
-                    Some(falsified_lit) => {
-                        return SolverAction::Continue(falsified_lit);
-                    }
-                }
+                return SolverAction::Backtrack;
             }
             PropagationResult::Undecided => {
                 // No conflicts & not all clauses satisfied => some clauses are still undecided
                 // Make the next branching decision
-                return SolverAction::Continue(self.make_branching_decision());
+                return SolverAction::Decision(self.make_branching_decision());
             }
         }
     }
@@ -142,6 +149,6 @@ enum PropagationResult {
 
 pub enum SolverAction {
     SAT,
-    UNSAT,
-    Continue(Lit),
+    Backtrack,
+    Decision(Lit),
 }

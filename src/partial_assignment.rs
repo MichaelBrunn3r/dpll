@@ -1,3 +1,6 @@
+use itertools::Itertools;
+use log::info;
+
 use crate::{
     clause::{Lit, VariableId},
     utils::opt_bool::OptBool,
@@ -20,26 +23,53 @@ pub struct PartialAssignment<'a> {
     decision_marks: Vec<usize>,
     /// The number of currently assigned variables.
     num_assigned: usize,
+    initial_decision_level: usize,
 }
 
 impl<'a> PartialAssignment<'a> {
     /// Creates a new Assignment state with the given initial assignment.
     /// The initial assignment will be treated as level 0 (no decisions made yet).
-    pub fn with_assignment(initial_assignment: &'a mut [OptBool]) -> Self {
+    pub fn with_assignment(
+        initial_assignment: &'a mut [OptBool],
+        initial_decision_level: usize,
+    ) -> Self {
+        let num_assigned = initial_assignment
+            .iter()
+            .filter(|&state| state.is_some())
+            .count();
+
+        assert!(
+            num_assigned == initial_decision_level,
+            "Initial assignment has {} assigned variables, but initial decision level is {}.",
+            num_assigned,
+            initial_decision_level
+        );
+
+        let history = initial_assignment
+            .iter()
+            .enumerate()
+            .filter_map(|(var, &state)| if state.is_some() { Some(var) } else { None })
+            .collect_vec();
+
+        assert!(
+            history.len() == initial_decision_level,
+            "Initial assignment has {} assigned variables, but initial decision level is {}.",
+            history.len(),
+            initial_decision_level
+        );
+
         PartialAssignment {
-            history: Vec::new(),
+            history,
             decision_marks: Vec::new(),
-            num_assigned: initial_assignment
-                .iter()
-                .filter(|&state| state.is_some())
-                .count(),
+            num_assigned,
             current_state: initial_assignment,
+            initial_decision_level,
         }
     }
 
     /// Returns the current decision level (depth of the search tree).
     pub fn decision_level(&self) -> usize {
-        self.decision_marks.len()
+        self.decision_marks.len() + self.initial_decision_level
     }
 
     /// Check if a variable is assigned.
@@ -75,38 +105,51 @@ impl<'a> PartialAssignment<'a> {
     }
 
     /// Backtracks to the highest decision level that hasn't been fully explored.
+    pub fn backtrack(&mut self) -> Option<Lit> {
+        loop {
+            match self.backtrack_once() {
+                BacktrackResult::TryAlternative(falsified_lit) => return Some(falsified_lit),
+                BacktrackResult::NoMoreDecisions => {
+                    return None;
+                }
+                BacktrackResult::Continue => {
+                    continue;
+                }
+            }
+        }
+    }
+
+    /// Attempts to backtrack one decision level.
     ///
     /// 1. Reverts unit propagations at the current level.
     /// 2. Checks the previously explored decision:
     ///   - Tried 'true': Try false next. Returns the literal that was falsified because of this change.
-    ///   - Tried 'false': All options explored. Try exploring the next higher decision level.
+    ///   - Tried 'false': All options explored. Returns None to indicate the need to backtrack further.
     ///
-    /// Returns `None` if no further backtracking is possible (all options exhausted).
-    pub fn backtrack(&mut self) -> Option<Lit> {
-        loop {
-            // Check if we can backtrack further.
-            if self.decision_marks.is_empty() {
-                return None;
-            }
-
-            // Undo all propagations that happened *after* the decision for this level.
-            let decision_idx = self.undo_current_unit_propagations();
-            let decision_var = self.history[decision_idx];
-
-            if self.current_state[decision_var].is_true() {
-                // We tried true without success => try false next.
-                self.current_state[decision_var] = OptBool::False;
-                return Some(Lit::new(decision_var, true));
-            } else {
-                // We tried both true and false with no success
-                // => All options at this level are exhausted. Try the next higher level.
-                self.current_state[decision_var] = OptBool::Unassigned;
-                self.num_assigned -= 1;
-                self.history.pop();
-                self.decision_marks.pop();
-                continue;
-            };
+    /// Returns `None` if the current level has been fully explored and backtracking should continue to the next higher level.
+    pub fn backtrack_once(&mut self) -> BacktrackResult {
+        // Check if we can backtrack further.
+        if self.decision_marks.is_empty() {
+            return BacktrackResult::NoMoreDecisions;
         }
+
+        // Undo all propagations that happened *after* the decision for this level.
+        let decision_idx = self.undo_current_unit_propagations();
+        let decision_var = self.history[decision_idx];
+
+        if self.current_state[decision_var].is_true() {
+            // We tried true without success => try false next.
+            self.current_state[decision_var] = OptBool::False;
+            return BacktrackResult::TryAlternative(Lit::new(decision_var, true));
+        } else {
+            // We tried both true and false with no success
+            // => All options at this level are exhausted. Try the next higher level.
+            self.current_state[decision_var] = OptBool::Unassigned;
+            self.num_assigned -= 1;
+            self.history.pop();
+            self.decision_marks.pop();
+            return BacktrackResult::Continue;
+        };
     }
 
     /// Undoes unit propagations for the current level, leaving the decision variable intact.
@@ -121,6 +164,34 @@ impl<'a> PartialAssignment<'a> {
             self.num_assigned -= 1;
         }
         *level_start
+    }
+
+    /// Extracts the current sequence of variable assignment decisions into the provided buffer.
+    pub fn extract_decision(&self) -> Vec<(VariableId, bool)> {
+        let mut buffer = Vec::new();
+
+        // first, extract the initial decisions
+        for i in 0..self.initial_decision_level {
+            let var = self.history[i];
+            let val = self.current_state[var].unwrap();
+            buffer.push((var, val));
+        }
+
+        for &decision_idx in &self.decision_marks {
+            let var = self.history[decision_idx];
+            let val = self.current_state[var].unwrap();
+            buffer.push((var, val));
+        }
+
+        assert!(
+            buffer.len() == self.decision_level(),
+            "Extracted {}, but we are @{}. Initial level: {}",
+            buffer.len(),
+            self.decision_level(),
+            self.initial_decision_level
+        );
+
+        buffer
     }
 
     /// Converts the partial assignment to a full solution.
@@ -178,4 +249,10 @@ impl<'a> Deref for PartialAssignment<'a> {
     fn deref(&self) -> &Self::Target {
         &self.current_state
     }
+}
+
+pub enum BacktrackResult {
+    TryAlternative(Lit),
+    NoMoreDecisions,
+    Continue,
 }

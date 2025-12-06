@@ -278,6 +278,7 @@ dependencies = [
  "clap",
  "criterion",
  "crossbeam-channel",
+ "crossbeam-deque",
  "env_logger",
  "fastrand",
  "indicatif",

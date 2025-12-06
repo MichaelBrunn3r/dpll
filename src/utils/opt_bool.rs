@@ -34,6 +34,12 @@ impl OptBool {
     }
 
     #[inline(always)]
+    pub fn unwrap(self) -> bool {
+        debug_assert!(self.is_some(), "Called unwrap on an unassigned OptBool.");
+        self.is_true()
+    }
+
+    #[inline(always)]
     pub fn unwrap_or(self, default: bool) -> bool {
         (self as u8 & 1) != 0 || default
     }
