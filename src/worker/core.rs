@@ -47,10 +47,10 @@ impl<B: WorkerStrategy> WorkerCore<B> {
             }
 
             self.num_active_workers
-                .fetch_add(1, atomic::Ordering::Relaxed);
+                .fetch_add(1, atomic::Ordering::Release);
             self.solve_subproblem(subproblem);
             self.num_active_workers
-                .fetch_sub(1, atomic::Ordering::Relaxed);
+                .fetch_sub(1, atomic::Ordering::Release);
         }
     }
 
@@ -73,7 +73,7 @@ impl<B: WorkerStrategy> WorkerCore<B> {
 
         loop {
             // Check if another worker has already found a solution
-            if ctx.solution_found_flag.load(atomic::Ordering::Relaxed) {
+            if ctx.solution_found_flag.load(atomic::Ordering::Acquire) {
                 break;
             }
 
@@ -97,23 +97,27 @@ impl<B: WorkerStrategy> WorkerCore<B> {
                         continue;
                     }
 
-                    self.num_active_workers
-                        .fetch_sub(1, atomic::Ordering::Relaxed);
-                    match self
-                        .strat
-                        .find_new_work(solver, &ctx.problem, &ctx.solution_found_flag)
+                    let is_last_active = self
+                        .num_active_workers
+                        .fetch_sub(1, atomic::Ordering::AcqRel)
+                        == 1;
+
+                    if !is_last_active
+                        && let Some((lit, new_solver)) = self.strat.find_new_work(
+                            solver,
+                            &ctx.problem,
+                            &ctx.solution_found_flag,
+                            &self.num_active_workers,
+                        )
                     {
-                        Some((lit, new_solver)) => {
-                            falsified_lit = lit;
-                            solver = new_solver;
-                            self.num_active_workers
-                                .fetch_add(1, atomic::Ordering::Relaxed);
-                            continue;
-                        }
-                        None => {
-                            break;
-                        }
-                    };
+                        falsified_lit = lit;
+                        solver = new_solver;
+                        self.num_active_workers
+                            .fetch_add(1, atomic::Ordering::Release);
+                        continue;
+                    }
+
+                    break;
                 }
             }
         }

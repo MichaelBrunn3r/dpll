@@ -1,3 +1,4 @@
+use core::num;
 use std::{
     sync::atomic::{self},
     time::Duration,
@@ -79,39 +80,39 @@ impl WorkerStrategy for StealingWorker {
         _current_solver: DPLLSolver,
         problem: &'p Problem,
         solution_found_flag: &atomic::AtomicBool,
+        num_active_workers: &atomic::AtomicUsize,
     ) -> Option<(Lit, DPLLSolver<'p>)> {
         loop {
-            // Try to steal a decision path from peers
-            match self.try_steal_from_peers() {
-                Some(stolen_path) => {
-                    let mut init_assignment = vec![OptBool::Unassigned; problem.num_vars];
-                    for (var, val) in &stolen_path.decisions {
-                        init_assignment[*var] = OptBool::from(*val);
-                    }
-
-                    let solver = DPLLSolver::with_assignment(
-                        &problem,
-                        init_assignment,
-                        stolen_path.decisions.len(),
-                    );
-                    let (last_var, last_val) = stolen_path.decisions.last().unwrap();
-                    let falsified_lit = Lit::new(*last_var, *last_val).negated();
-
-                    // info!(
-                    //     "[{}] Stole@{} => continue @{}",
-                    //     self._id,
-                    //     stolen_path.decisions.len(),
-                    //     solver.assignment.decision_level()
-                    // );
-                    return Some((falsified_lit, solver));
+            if let Some(stolen_path) = self.try_steal_from_peers() {
+                let mut init_assignment = vec![OptBool::Unassigned; problem.num_vars];
+                for (var, val) in &stolen_path.decisions {
+                    init_assignment[*var] = OptBool::from(*val);
                 }
-                None => {
-                    if solution_found_flag.load(atomic::Ordering::Relaxed) {
-                        return None;
-                    }
-                    std::thread::sleep(Duration::from_micros(100));
-                }
+
+                let solver = DPLLSolver::with_assignment(
+                    &problem,
+                    init_assignment,
+                    stolen_path.decisions.len(),
+                );
+                let (last_var, last_val) = stolen_path.decisions.last().unwrap();
+                let falsified_lit = Lit::new(*last_var, *last_val).negated();
+
+                // info!(
+                //     "[{}] Stole@{} => continue @{}",
+                //     self._id,
+                //     stolen_path.decisions.len(),
+                //     solver.assignment.decision_level()
+                // );
+                return Some((falsified_lit, solver));
             }
+
+            if solution_found_flag.load(atomic::Ordering::Acquire)
+                || num_active_workers.load(atomic::Ordering::Acquire) == 0
+            {
+                return None;
+            }
+
+            std::thread::sleep(Duration::from_micros(100));
         }
     }
 

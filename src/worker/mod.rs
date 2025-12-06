@@ -12,6 +12,7 @@ pub trait WorkerStrategy {
         _current_solver: DPLLSolver,
         _problem: &'p Problem,
         _solution_found_flag: &atomic::AtomicBool,
+        _num_active_workers: &atomic::AtomicUsize,
     ) -> Option<(Lit, DPLLSolver<'p>)> {
         None
     }
