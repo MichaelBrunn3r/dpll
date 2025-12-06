@@ -1,8 +1,11 @@
 use crate::{
-    clause::VariableId, dpll::DPLLSolver, generator, problem::Problem, utils::opt_bool::OptBool,
-    worker::Worker,
+    clause::VariableId,
+    dpll::DPLLSolver,
+    generator,
+    problem::Problem,
+    utils::opt_bool::OptBool,
+    worker::{WorkerStrategyType, core::WorkerCore, stealing::StealingWorker},
 };
-use core::num;
 use itertools::Itertools;
 use std::{
     sync::{
@@ -23,7 +26,7 @@ pub struct WorkerPool {
 }
 
 impl WorkerPool {
-    pub fn new(num_workers: usize) -> Self {
+    pub fn new(num_workers: usize, strategy: WorkerStrategyType) -> Self {
         // Limit number of workers to available parallelism
         let num_workers = num_workers.min(available_parallelism().map(|n| n.get()).unwrap_or(1));
 
@@ -76,7 +79,17 @@ impl WorkerPool {
                 .collect();
 
             workers.push(thread::spawn(move || {
-                Worker::new(worker_id, rx, ctx, local_queue, peer_queues, active).run();
+                // let behavior = StealingWorker::new(local_queue, peer_queues);
+                match strategy {
+                    WorkerStrategyType::Basic => {
+                        let behavior = crate::worker::BasicWorker {};
+                        WorkerCore::new(worker_id, active, rx, ctx, behavior).run();
+                    }
+                    WorkerStrategyType::Stealing => {
+                        let behavior = StealingWorker::new(local_queue, peer_queues);
+                        WorkerCore::new(worker_id, active, rx, ctx, behavior).run();
+                    }
+                }
             }));
         }
 
@@ -94,8 +107,8 @@ impl WorkerPool {
             Some(tx) => tx,
             None => {
                 // Single-threaded mode
-                let mut assignment_buffer = vec![OptBool::Unassigned; problem.num_vars];
-                return DPLLSolver::with_assignment(&problem, &mut assignment_buffer, 0).solve();
+                let assignment_buffer = vec![OptBool::Unassigned; problem.num_vars];
+                return DPLLSolver::with_assignment(&problem, assignment_buffer, 0).solve();
             }
         };
 

@@ -9,7 +9,7 @@ use stackvector::StackVec;
 
 pub struct DPLLSolver<'a> {
     problem: &'a Problem,
-    pub assignment: PartialAssignment<'a>,
+    pub assignment: PartialAssignment,
     /// Reusable buffer for literals that have just been falsified during unit propagation.
     falsified_lits_buffer: StackVec<[Lit; MAX_FALSIFIED_LITS]>,
     /// Cursor to keep track of which variable to consider next for branching decisions.
@@ -19,7 +19,7 @@ pub struct DPLLSolver<'a> {
 impl<'a> DPLLSolver<'a> {
     pub fn with_assignment(
         problem: &'a Problem,
-        initial_assignment: &'a mut [OptBool],
+        initial_assignment: Vec<OptBool>,
         initial_decision_level: usize,
     ) -> Self {
         debug_assert!(

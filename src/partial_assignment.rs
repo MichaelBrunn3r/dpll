@@ -1,5 +1,4 @@
 use itertools::Itertools;
-use log::info;
 
 use crate::{
     clause::{Lit, VariableId},
@@ -9,10 +8,10 @@ use std::ops::{Deref, Index};
 
 /// Manages the partial assignment of variables during the DPLL solving process.
 /// Supports decisions, unit propagations, and decision backtracking.
-pub struct PartialAssignment<'a> {
+pub struct PartialAssignment {
     /// The current partial assignment for all variables.
     /// None=unassigned, Some(bool)=assigned to true/false.
-    current_state: &'a mut [OptBool],
+    current_state: Vec<OptBool>,
 
     /// A chronological stack of all variable assignments (decisions & unit propagations).
     /// Used to undo assignments during backtracking.
@@ -26,11 +25,11 @@ pub struct PartialAssignment<'a> {
     initial_decision_level: usize,
 }
 
-impl<'a> PartialAssignment<'a> {
+impl PartialAssignment {
     /// Creates a new Assignment state with the given initial assignment.
     /// The initial assignment will be treated as level 0 (no decisions made yet).
     pub fn with_assignment(
-        initial_assignment: &'a mut [OptBool],
+        initial_assignment: Vec<OptBool>,
         initial_decision_level: usize,
     ) -> Self {
         let num_assigned = initial_assignment
@@ -38,7 +37,7 @@ impl<'a> PartialAssignment<'a> {
             .filter(|&state| state.is_some())
             .count();
 
-        assert!(
+        debug_assert!(
             num_assigned == initial_decision_level,
             "Initial assignment has {} assigned variables, but initial decision level is {}.",
             num_assigned,
@@ -51,7 +50,7 @@ impl<'a> PartialAssignment<'a> {
             .filter_map(|(var, &state)| if state.is_some() { Some(var) } else { None })
             .collect_vec();
 
-        assert!(
+        debug_assert!(
             history.len() == initial_decision_level,
             "Initial assignment has {} assigned variables, but initial decision level is {}.",
             history.len(),
@@ -183,7 +182,7 @@ impl<'a> PartialAssignment<'a> {
             buffer.push((var, val));
         }
 
-        assert!(
+        debug_assert!(
             buffer.len() == self.decision_level(),
             "Extracted {}, but we are @{}. Initial level: {}",
             buffer.len(),
@@ -235,7 +234,7 @@ impl<'a> PartialAssignment<'a> {
     }
 }
 
-impl<'a> Index<usize> for PartialAssignment<'a> {
+impl Index<usize> for PartialAssignment {
     type Output = OptBool;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -243,7 +242,7 @@ impl<'a> Index<usize> for PartialAssignment<'a> {
     }
 }
 
-impl<'a> Deref for PartialAssignment<'a> {
+impl Deref for PartialAssignment {
     type Target = [OptBool];
 
     fn deref(&self) -> &Self::Target {

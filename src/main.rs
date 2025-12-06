@@ -1,6 +1,7 @@
 pub mod cli;
 
 use clap::{Parser, Subcommand};
+use dpll::worker::WorkerStrategyType;
 use std::{error::Error, path::PathBuf};
 
 use crate::cli::{generate::generate, solve::solve};
@@ -29,6 +30,13 @@ pub enum Command {
         /// Disable the progress bar
         #[arg(long = "no-bar")]
         no_progress_bar: bool,
+        #[arg(
+            short = 's',
+            long = "strategy",
+            value_name = "STRATEGY",
+            default_value = "basic"
+        )]
+        strategy: WorkerStrategyType,
     },
     #[command(name = "generate")]
     Generate { num_pigeons: usize },
@@ -44,8 +52,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             validate,
             num_worker_threads,
             no_progress_bar,
+            strategy,
         } => {
-            solve(path, limit, validate, num_worker_threads, no_progress_bar)?;
+            solve(
+                path,
+                limit,
+                validate,
+                num_worker_threads,
+                no_progress_bar,
+                strategy,
+            )?;
         }
         Command::Generate { num_pigeons: size } => {
             generate(size)?;

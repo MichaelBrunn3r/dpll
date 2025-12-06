@@ -1,6 +1,7 @@
 use crate::cli::{self, Stats};
 use dpll::{
     measure_time, parser::parse_dimacs_cnf, pool::WorkerPool, record_time, utils::human_duration,
+    worker::WorkerStrategyType,
 };
 use log::{error, info, warn};
 use memmap2::Mmap;
@@ -18,11 +19,12 @@ pub fn solve(
     validate: bool,
     num_worker_threads: usize,
     no_progress_bar: bool,
+    strategy: WorkerStrategyType,
 ) -> Result<(), Box<dyn Error>> {
     let progress = cli::init_logging();
 
     let start = Instant::now();
-    let pool = WorkerPool::new(num_worker_threads);
+    let pool = WorkerPool::new(num_worker_threads, strategy);
     info!(
         "Initialized pool with {} worker thread(s).",
         pool.num_workers
