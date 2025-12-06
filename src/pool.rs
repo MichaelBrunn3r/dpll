@@ -2,11 +2,12 @@ use crate::{
     clause::VariableId, dpll::DPLLSolver, generator, problem::Problem, utils::opt_bool::OptBool,
     worker::Worker,
 };
+use core::num;
 use itertools::Itertools;
 use std::{
     sync::{
         Arc, RwLock,
-        atomic::{self, AtomicBool},
+        atomic::{self, AtomicBool, AtomicUsize},
         mpsc,
     },
     thread::{self, available_parallelism},
@@ -18,6 +19,7 @@ pub struct WorkerPool {
     _workers: Vec<thread::JoinHandle<()>>,
     shared_ctx: Arc<RwLock<SharedContext>>,
     pub num_workers: usize,
+    pub active_workers: Arc<AtomicUsize>,
 }
 
 impl WorkerPool {
@@ -35,6 +37,7 @@ impl WorkerPool {
                     problem_ctx: Arc::new(ProblemContext::default()),
                 })),
                 num_workers: 1,
+                active_workers: Arc::new(AtomicUsize::new(0)),
             };
         }
 
@@ -54,12 +57,15 @@ impl WorkerPool {
             local_queues.push(local_queue);
         }
 
+        let active_workers = Arc::new(AtomicUsize::new(0));
+
         // Spawn worker threads
         let mut workers = Vec::with_capacity(num_workers);
         for worker_id in 0..num_workers {
             let rx = task_receiver.clone();
             let ctx = shared_ctx.clone();
             let local_queue = local_queues.remove(0);
+            let active = active_workers.clone();
 
             // Give worker stealers for all OTHER workers' queues
             let peer_queues = all_stealers
@@ -70,7 +76,7 @@ impl WorkerPool {
                 .collect();
 
             workers.push(thread::spawn(move || {
-                Worker::new(worker_id, rx, ctx, local_queue, peer_queues).run();
+                Worker::new(worker_id, rx, ctx, local_queue, peer_queues, active).run();
             }));
         }
 
@@ -79,6 +85,7 @@ impl WorkerPool {
             _workers: workers,
             shared_ctx,
             num_workers,
+            active_workers,
         }
     }
 
@@ -103,7 +110,7 @@ impl WorkerPool {
             ctx_lock.problem_ctx = Arc::new(ProblemContext {
                 problem: Arc::clone(&problem),
                 solution_found_flag: Arc::clone(&solution_found),
-                sender: tx.clone(),
+                solution_sender: tx.clone(),
             });
             ctx_lock.current_pid
         };
@@ -111,6 +118,8 @@ impl WorkerPool {
         let depth = Self::calculate_depth(self.num_workers, problem.num_vars);
         let split_vars = Arc::new(Self::select_split_vars(&problem, depth));
 
+        self.active_workers
+            .store(self.num_workers, atomic::Ordering::Release);
         let mut active_jobs = 0;
         for init_assignment in Self::generate_combinations(&problem, &split_vars) {
             // Check if a solution has been found while generating jobs
@@ -134,20 +143,19 @@ impl WorkerPool {
             return None; // No valid jobs were generated, i.e. problem is unsatisfiable
         }
 
-        let mut completed_jobs = 0;
-        while let Ok(result) = rx.recv() {
-            match result {
-                WorkerResult::SAT(solution) => return Some(solution),
-                WorkerResult::UNSAT => {
-                    completed_jobs += 1;
-                    if completed_jobs == active_jobs {
-                        return None; // All jobs completed, no solution found
-                    }
-                }
+        loop {
+            if let Ok(solution) = rx.try_recv() {
+                return Some(solution);
             }
-        }
 
-        None
+            let idle = self.active_workers.load(atomic::Ordering::Acquire);
+
+            if idle == self.num_workers {
+                return None; // All workers idle => UNSAT
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
 
     /// Calculate depth required to generate at least `num_workers` initial assignments.
@@ -216,8 +224,7 @@ pub struct ProblemContext {
     pub problem: Arc<Problem>,
     /// Flag indicating if a solution has been found.
     pub solution_found_flag: Arc<AtomicBool>,
-    /// Channel to send back job results.
-    pub sender: mpsc::Sender<WorkerResult>,
+    pub solution_sender: mpsc::Sender<Vec<bool>>,
 }
 
 impl Default for ProblemContext {
@@ -225,7 +232,7 @@ impl Default for ProblemContext {
         Self {
             problem: Arc::new(Problem::default()),
             solution_found_flag: Arc::new(AtomicBool::new(false)),
-            sender: mpsc::channel().0,
+            solution_sender: mpsc::channel().0,
         }
     }
 }
@@ -244,14 +251,6 @@ impl SubProblem {
             init_assignment,
         }
     }
-}
-
-/// Result sent back from workers when they complete a sub-problem.
-pub enum WorkerResult {
-    /// The sub-problem is satisfiable, with the given solution.
-    SAT(Vec<bool>),
-    /// The sub-problem is unsatisfiable.
-    UNSAT,
 }
 
 /// A sequence of variable assignment decisions made during search.

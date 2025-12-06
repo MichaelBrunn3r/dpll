@@ -41,6 +41,10 @@ panic = "abort"
 strip = true
 rustflags = ["-Ctarget-cpu=native", "-Clink-arg=-fuse-ld=mold"]
 
+[profile.perf_dbg]
+inherits = "perf"
+debug = true
+
 [profile.flamegraph]
 inherits = "perf"
 debug = true

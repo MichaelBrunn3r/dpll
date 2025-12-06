@@ -1,17 +1,19 @@
-use log::{error, info};
-
 use crate::{
-    clause::{Lit, VariableId},
+    clause::Lit,
     dpll::{DPLLSolver, SolverAction},
     partial_assignment::BacktrackResult,
-    pool::{DecisionPath, ProblemContext, SharedContext, SubProblem, WorkerResult},
+    pool::{DecisionPath, ProblemContext, SharedContext, SubProblem},
     utils::opt_bool::OptBool,
 };
-use std::sync::{Arc, RwLock, atomic};
+use std::{
+    sync::{Arc, RwLock, atomic},
+    time::Duration,
+};
 
 pub struct Worker {
     _id: usize,
     subproblem_receiver: crossbeam_channel::Receiver<SubProblem>,
+    active_workers: Arc<atomic::AtomicUsize>,
 
     // --- Context ---
     shared_ctx: Arc<RwLock<SharedContext>>,
@@ -35,6 +37,7 @@ impl Worker {
         shared_ctx: Arc<RwLock<SharedContext>>,
         local_queue: crossbeam_deque::Worker<DecisionPath>,
         peer_queues: Vec<crossbeam_deque::Stealer<DecisionPath>>,
+        active_workers: Arc<atomic::AtomicUsize>,
     ) -> Self {
         Worker {
             _id: id,
@@ -47,6 +50,7 @@ impl Worker {
             offer_threshold: 0,
             level_offered_counts: Vec::new(),
             stole: false,
+            active_workers,
         }
     }
 
@@ -56,8 +60,10 @@ impl Worker {
                 self.update_problem_ctx(&subproblem);
             }
 
+            self.active_workers.fetch_add(1, atomic::Ordering::Release);
             let ctx = Arc::clone(&self.local_problem_ctx);
             self.solve(&ctx, &mut subproblem.init_assignment);
+            self.active_workers.fetch_sub(1, atomic::Ordering::Release);
         }
     }
 
@@ -87,9 +93,7 @@ impl Worker {
                         .store(true, atomic::Ordering::Release);
 
                     // Send the found solution
-                    let _ = ctx
-                        .sender
-                        .send(WorkerResult::SAT(solver.assignment.to_solution()));
+                    let _ = ctx.solution_sender.send(solver.assignment.to_solution());
                     break;
                 }
                 SolverAction::Decision(next_falsified_lit) => {
@@ -122,33 +126,44 @@ impl Worker {
                         continue;
                     }
 
-                    // Try to steal a decision path from peers
-                    match self.try_steal_from_peers() {
-                        Some(stolen_path) => {
-                            *init_assignment = vec![OptBool::Unassigned; ctx.problem.num_vars];
-                            for (var, val) in &stolen_path.decisions {
-                                init_assignment[*var] = OptBool::from(*val);
+                    self.active_workers.fetch_sub(1, atomic::Ordering::Release);
+                    loop {
+                        // Try to steal a decision path from peers
+                        match self.try_steal_from_peers() {
+                            Some(stolen_path) => {
+                                *init_assignment = vec![OptBool::Unassigned; ctx.problem.num_vars];
+                                for (var, val) in &stolen_path.decisions {
+                                    init_assignment[*var] = OptBool::from(*val);
+                                }
+
+                                solver = DPLLSolver::with_assignment(
+                                    &ctx.problem,
+                                    init_assignment,
+                                    stolen_path.decisions.len(),
+                                );
+                                let (last_var, last_val) = stolen_path.decisions.last().unwrap();
+                                falsified_lit = Lit::new(*last_var, *last_val).negated();
+
+                                self.active_workers.fetch_add(1, atomic::Ordering::Release);
+
+                                // info!(
+                                //     "[{}] Stole@{} => continue @{}",
+                                //     self._id,
+                                //     stolen_path.decisions.len(),
+                                //     solver.assignment.decision_level()
+                                // );
+                                break;
                             }
-
-                            solver = DPLLSolver::with_assignment(
-                                &ctx.problem,
-                                init_assignment,
-                                stolen_path.decisions.len(),
-                            );
-                            let (last_var, last_val) = stolen_path.decisions.last().unwrap();
-                            falsified_lit = Lit::new(*last_var, *last_val).negated();
-
-                            // info!(
-                            //     "[{}] Stole@{} => continue @{}",
-                            //     self._id,
-                            //     stolen_path.decisions.len(),
-                            //     solver.assignment.decision_level()
-                            // );
-                        }
-                        None => {
-                            // Unable to backtrack & no paths to steal => We are done with this problem
-                            let _ = ctx.sender.send(WorkerResult::UNSAT);
-                            break;
+                            None => {
+                                if self
+                                    .local_problem_ctx
+                                    .solution_found_flag
+                                    .load(atomic::Ordering::Relaxed)
+                                {
+                                    return;
+                                }
+                                std::thread::sleep(Duration::from_micros(100));
+                            }
                         }
                     }
                 }
@@ -214,11 +229,11 @@ impl Worker {
         // Calculate offer threshold based on problem size
         let num_vars = self.local_problem_ctx.problem.num_vars;
         self.offer_threshold = (num_vars as f64).log2().ceil() as usize;
-        // self.offer_threshold = 4;
+        // self.offer_threshold = 1;
 
         self.level_offered_counts.clear();
         self.level_offered_counts
-            .resize(self.offer_threshold + 1, 0);
+            .resize(self.local_problem_ctx.problem.num_vars, 0);
         self.stole = false;
     }
 
@@ -234,10 +249,6 @@ impl Worker {
                 count
             );
         }
-
-        // 1: T     F
-        // 2: T  F  T  F
-        // 3L TF TF TF TF
 
         // info!(
         //     "[{}] Offer @{} #{}",
