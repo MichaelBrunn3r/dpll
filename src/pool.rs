@@ -180,10 +180,9 @@ impl WorkerPool {
 
         self.active_workers
             .store(self.num_workers, atomic::Ordering::Release);
-        let mut active_jobs = 0;
         for init_assignment in Self::generate_combinations(&problem, &split_vars) {
             // Check if a solution has been found while generating jobs
-            if solution_found.load(atomic::Ordering::Relaxed) {
+            if solution_found.load(atomic::Ordering::Acquire) {
                 break;
             }
 
@@ -193,25 +192,21 @@ impl WorkerPool {
             {
                 return None;
             }
-
-            active_jobs += 1;
         }
 
         drop(tx);
 
-        if active_jobs == 0 {
-            return None; // No valid jobs were generated, i.e. problem is unsatisfiable
-        }
-
         loop {
+            // Check if we have received a solution
             if let Ok(solution) = rx.try_recv() {
                 return Some(solution);
             }
 
-            let idle = self.active_workers.load(atomic::Ordering::Acquire);
+            let num_idle = self.active_workers.load(atomic::Ordering::Acquire);
+            let pending_subproblems = job_sender.len();
 
-            if idle == self.num_workers {
-                return None; // All workers idle => UNSAT
+            if num_idle == self.num_workers && pending_subproblems == 0 {
+                return None; // UNSAT
             }
 
             std::thread::sleep(std::time::Duration::from_millis(1));
