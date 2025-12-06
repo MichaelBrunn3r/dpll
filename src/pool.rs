@@ -29,27 +29,68 @@ impl WorkerPool {
     pub fn new(num_workers: usize, strategy: WorkerStrategyType) -> Self {
         // Limit number of workers to available parallelism
         let num_workers = num_workers.min(available_parallelism().map(|n| n.get()).unwrap_or(1));
-
-        // Single-threaded mode
         if num_workers <= 1 {
-            return Self {
-                job_sender: None,
-                _workers: Vec::new(),
-                shared_ctx: Arc::new(RwLock::new(SharedContext {
-                    current_pid: 0,
-                    problem_ctx: Arc::new(ProblemContext::default()),
-                })),
-                num_workers: 1,
-                active_workers: Arc::new(AtomicUsize::new(0)),
-            };
+            return Self::new_single_threaded();
         }
 
-        // Setup coordination utilities
-        let (task_sender, task_receiver) = crossbeam_channel::unbounded::<SubProblem>();
+        // Create communication utilities for subproblem distribution
+        let (subproblem_sender, subproblem_receiver) = crossbeam_channel::unbounded::<SubProblem>();
         let shared_ctx = Arc::new(RwLock::new(SharedContext {
             current_pid: 0,
             problem_ctx: Arc::new(ProblemContext::default()),
         }));
+
+        // Spawn worker threads
+        let mut workers = Vec::with_capacity(num_workers);
+        let num_active_workers = Arc::new(AtomicUsize::new(0));
+        match strategy {
+            WorkerStrategyType::Basic => {
+                Self::start_basic_workers(
+                    &mut workers,
+                    subproblem_receiver,
+                    &num_active_workers,
+                    &shared_ctx,
+                );
+            }
+            WorkerStrategyType::Stealing => {
+                Self::start_stealing_workers(
+                    &mut workers,
+                    subproblem_receiver,
+                    &num_active_workers,
+                    &shared_ctx,
+                );
+            }
+        }
+
+        Self {
+            job_sender: Some(subproblem_sender),
+            _workers: workers,
+            shared_ctx,
+            num_workers,
+            active_workers: num_active_workers,
+        }
+    }
+
+    pub fn new_single_threaded() -> Self {
+        Self {
+            job_sender: None,
+            _workers: Vec::new(),
+            shared_ctx: Arc::new(RwLock::new(SharedContext {
+                current_pid: 0,
+                problem_ctx: Arc::new(ProblemContext::default()),
+            })),
+            num_workers: 1,
+            active_workers: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    pub fn start_stealing_workers(
+        workers: &mut Vec<thread::JoinHandle<()>>,
+        subproblem_receiver: crossbeam_channel::Receiver<SubProblem>,
+        num_active_workers: &Arc<AtomicUsize>,
+        shared_ctx: &Arc<RwLock<SharedContext>>,
+    ) {
+        let num_workers = workers.capacity();
 
         // Create local queues and stealers from those queues
         let mut local_queues = Vec::with_capacity(num_workers);
@@ -60,15 +101,11 @@ impl WorkerPool {
             local_queues.push(local_queue);
         }
 
-        let active_workers = Arc::new(AtomicUsize::new(0));
-
-        // Spawn worker threads
-        let mut workers = Vec::with_capacity(num_workers);
         for worker_id in 0..num_workers {
-            let rx = task_receiver.clone();
-            let ctx = shared_ctx.clone();
             let local_queue = local_queues.remove(0);
-            let active = active_workers.clone();
+            let ctx = shared_ctx.clone();
+            let num_active_workers = num_active_workers.clone();
+            let subproblem_receiver = subproblem_receiver.clone();
 
             // Give worker stealers for all OTHER workers' queues
             let peer_queues = all_stealers
@@ -79,26 +116,36 @@ impl WorkerPool {
                 .collect();
 
             workers.push(thread::spawn(move || {
-                // let behavior = StealingWorker::new(local_queue, peer_queues);
-                match strategy {
-                    WorkerStrategyType::Basic => {
-                        let behavior = crate::worker::BasicWorker {};
-                        WorkerCore::new(worker_id, active, rx, ctx, behavior).run();
-                    }
-                    WorkerStrategyType::Stealing => {
-                        let behavior = StealingWorker::new(local_queue, peer_queues);
-                        WorkerCore::new(worker_id, active, rx, ctx, behavior).run();
-                    }
-                }
+                let behavior = StealingWorker::new(local_queue, peer_queues);
+                WorkerCore::new(
+                    worker_id,
+                    num_active_workers,
+                    subproblem_receiver.clone(),
+                    ctx,
+                    behavior,
+                )
+                .run();
             }));
         }
+    }
 
-        Self {
-            job_sender: Some(task_sender),
-            _workers: workers,
-            shared_ctx,
-            num_workers,
-            active_workers,
+    pub fn start_basic_workers(
+        workers: &mut Vec<thread::JoinHandle<()>>,
+        subproblem_receiver: crossbeam_channel::Receiver<SubProblem>,
+        num_active_workers: &Arc<AtomicUsize>,
+        shared_ctx: &Arc<RwLock<SharedContext>>,
+    ) {
+        let num_workers = workers.capacity();
+
+        for worker_id in 0..num_workers {
+            let rx: crossbeam_channel::Receiver<SubProblem> = subproblem_receiver.clone();
+            let ctx = shared_ctx.clone();
+            let active = num_active_workers.clone();
+
+            workers.push(thread::spawn(move || {
+                let behavior = crate::worker::BasicWorker {};
+                WorkerCore::new(worker_id, active, rx, ctx, behavior).run();
+            }));
         }
     }
 

@@ -13,7 +13,7 @@ use crate::{
 
 pub struct WorkerCore<S: WorkerStrategy> {
     _id: usize,
-    active_workers: Arc<AtomicUsize>,
+    num_active_workers: Arc<AtomicUsize>,
     subproblem_receiver: crossbeam_channel::Receiver<SubProblem>,
     shared_ctx: Arc<RwLock<SharedContext>>,
     cached_pid: usize,
@@ -36,7 +36,7 @@ impl<B: WorkerStrategy> WorkerCore<B> {
             strat: behavior,
             cached_pid: 0,
             local_problem_ctx: Arc::new(ProblemContext::default()),
-            active_workers,
+            num_active_workers: active_workers,
         }
     }
 
@@ -46,9 +46,11 @@ impl<B: WorkerStrategy> WorkerCore<B> {
                 self.sync_problem_context(subproblem.pid);
             }
 
-            self.active_workers.fetch_add(1, atomic::Ordering::Relaxed);
+            self.num_active_workers
+                .fetch_add(1, atomic::Ordering::Relaxed);
             self.solve_subproblem(subproblem);
-            self.active_workers.fetch_sub(1, atomic::Ordering::Relaxed);
+            self.num_active_workers
+                .fetch_sub(1, atomic::Ordering::Relaxed);
         }
     }
 
@@ -95,7 +97,8 @@ impl<B: WorkerStrategy> WorkerCore<B> {
                         continue;
                     }
 
-                    self.active_workers.fetch_sub(1, atomic::Ordering::Relaxed);
+                    self.num_active_workers
+                        .fetch_sub(1, atomic::Ordering::Relaxed);
                     match self
                         .strat
                         .find_new_work(solver, &ctx.problem, &ctx.solution_found_flag)
@@ -103,7 +106,8 @@ impl<B: WorkerStrategy> WorkerCore<B> {
                         Some((lit, new_solver)) => {
                             falsified_lit = lit;
                             solver = new_solver;
-                            self.active_workers.fetch_add(1, atomic::Ordering::Relaxed);
+                            self.num_active_workers
+                                .fetch_add(1, atomic::Ordering::Relaxed);
                             continue;
                         }
                         None => {
