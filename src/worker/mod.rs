@@ -7,7 +7,7 @@ pub mod stealing;
 
 pub trait WorkerStrategy {
     fn on_new_problem(&mut self, _problem: &Problem) {}
-    fn after_decision(&self, _solver: &DPLLSolver) {}
+    fn after_decision(&mut self, _solver: &DPLLSolver) {}
     fn find_new_work<'p>(
         &mut self,
         _current_solver: DPLLSolver,
@@ -17,7 +17,7 @@ pub trait WorkerStrategy {
     ) -> Option<(Lit, DPLLSolver<'p>)> {
         None
     }
-    fn should_stop_backtracking_early(&self, _solver: &DPLLSolver) -> bool {
+    fn should_stop_backtracking_early(&mut self, _solver: &DPLLSolver) -> bool {
         false
     }
 }

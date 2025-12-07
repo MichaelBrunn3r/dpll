@@ -193,6 +193,16 @@ impl PartialAssignment {
         buffer
     }
 
+    /// Returns the value of the last decision made, or None if no decisions have been made.
+    pub fn last_decision(&self) -> OptBool {
+        if let Some(&decision_idx) = self.decision_marks.last() {
+            let var = self.history[decision_idx];
+            self.current_state[var]
+        } else {
+            OptBool::Unassigned
+        }
+    }
+
     /// Converts the partial assignment to a full solution.
     /// Unassigned variables default to `false`.
     pub fn to_solution(&self) -> Vec<bool> {

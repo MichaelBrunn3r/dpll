@@ -1,4 +1,3 @@
-use core::num;
 use std::{
     sync::atomic::{self},
     time::Duration,
@@ -52,12 +51,13 @@ impl StealingWorker {
 impl WorkerStrategy for StealingWorker {
     #[inline(always)]
     fn on_new_problem(&mut self, problem: &Problem) {
-        self.offer_threshold = (problem.num_vars as f64).log2().ceil() as usize;
+        self.offer_threshold = 10;
     }
 
     #[inline(always)]
-    fn after_decision(&self, solver: &DPLLSolver) {
-        if solver.assignment.decision_level() > self.offer_threshold {
+    fn after_decision(&mut self, solver: &DPLLSolver) {
+        let level = solver.assignment.decision_level();
+        if level > self.offer_threshold {
             return;
         }
 
@@ -135,7 +135,13 @@ impl WorkerStrategy for StealingWorker {
     }
 
     #[inline(always)]
-    fn should_stop_backtracking_early(&self, solver: &DPLLSolver) -> bool {
+    fn should_stop_backtracking_early(&mut self, solver: &DPLLSolver) -> bool {
+        // If the last decision was a true branch, we didn't push it into the local queue.
+        // => Could not have been stolen.
+        if solver.assignment.last_decision() != OptBool::True {
+            return false;
+        }
+
         // Check if the alternative path we offered at this level was stolen.
         // We only offer paths up to offer_threshold, so only check in that range.
         let current_level = solver.assignment.decision_level();
