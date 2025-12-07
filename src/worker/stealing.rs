@@ -62,6 +62,7 @@ impl WorkerStrategy for StealingWorker {
     fn on_new_problem(&mut self, problem: &Problem) {
         self.offer_threshold = 15;
         self.deepest_offered_level = 0;
+        while let Some(_) = self.local_queue.pop() {}
     }
 
     #[inline(always)]
@@ -111,12 +112,12 @@ impl WorkerStrategy for StealingWorker {
         solution_found_flag: &atomic::AtomicBool,
         num_active_workers: &atomic::AtomicUsize,
     ) -> Option<(Lit, DPLLSolver<'p>)> {
+        debug_assert!(
+            self.local_queue.is_empty(),
+            "Expected empty local queue when stealing work, but there are {} paths available.",
+            self.local_queue.len()
+        );
         stats!(self._id, |worker, peers| {
-            debug_assert!(
-                self.local_queue.is_empty(),
-                "Expected empty local queue when stealing work, but there are {} paths available.",
-                self.local_queue.len()
-            );
             worker.queue_len.store(0, atomic::Ordering::Relaxed);
         });
 
