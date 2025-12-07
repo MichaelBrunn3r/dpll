@@ -10,9 +10,16 @@ use crate::{
 
 pub struct StealingWorker {
     _id: usize,
+    /// Local queue of offered decision paths.
     local_queue: crossbeam_deque::Worker<DecisionPath>,
+    /// Queues of peer workers to steal from, along with their IDs.
     peer_queues: Vec<(crossbeam_deque::Stealer<DecisionPath>, usize)>,
+    /// The decision level up to which to offer alternative paths to peers.
     offer_threshold: usize,
+    /// Maximum number of decision levels to keep in the local queue.
+    queue_limit: usize,
+    /// The deepest decision level that has been offered to peers.
+    deepest_offered_level: usize,
 }
 
 impl StealingWorker {
@@ -26,6 +33,8 @@ impl StealingWorker {
             local_queue,
             peer_queues,
             offer_threshold: 0,
+            queue_limit: 15,
+            deepest_offered_level: 0,
         }
     }
 
@@ -51,13 +60,20 @@ impl StealingWorker {
 impl WorkerStrategy for StealingWorker {
     #[inline(always)]
     fn on_new_problem(&mut self, problem: &Problem) {
-        self.offer_threshold = 10;
+        self.offer_threshold = 15;
+        self.deepest_offered_level = 0;
     }
 
     #[inline(always)]
     fn after_decision(&mut self, solver: &DPLLSolver) {
+        if solver.assignment.last_decision() != OptBool::True {
+            return;
+        }
+
         let level = solver.assignment.decision_level();
-        if level > self.offer_threshold {
+
+        // Only offer if we're past the threshold AND the queue has space.
+        if level > self.offer_threshold || self.local_queue.len() >= self.queue_limit {
             return;
         }
 
@@ -77,6 +93,7 @@ impl WorkerStrategy for StealingWorker {
             worker.push.fetch_add(1, atomic::Ordering::Relaxed);
         });
         self.local_queue.push(DecisionPath::from(decisions));
+        self.deepest_offered_level = level;
     }
 
     #[inline(always)]
@@ -142,19 +159,23 @@ impl WorkerStrategy for StealingWorker {
             return false;
         }
 
+        let current_level = solver.assignment.decision_level();
+
+        // Only check levels we actually offered.
+        if current_level > self.offer_threshold || current_level > self.deepest_offered_level {
+            return false;
+        }
+
         // Check if the alternative path we offered at this level was stolen.
         // We only offer paths up to offer_threshold, so only check in that range.
-        let current_level = solver.assignment.decision_level();
-        if current_level <= self.offer_threshold {
+        if let Some(path) = self.local_queue.pop() {
             stats!(self._id, |worker, peers| {
                 worker.pop.fetch_add(1, atomic::Ordering::Relaxed);
             });
-            if let Some(_path) = self.local_queue.pop() {
-                return false;
-            }
-
-            return true;
+            self.deepest_offered_level = path.decisions.len() - 1;
+            return false;
         }
-        false
+
+        true
     }
 }
