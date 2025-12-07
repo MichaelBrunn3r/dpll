@@ -7,11 +7,27 @@ use std::time::Duration;
 
 pub const MAX_WORKERS: usize = 16;
 #[cfg(feature = "stats")]
+pub static SHARED_WORKER_STATS: CachePadded<SharedWorkerStats> =
+    CachePadded::new(SharedWorkerStats::new());
+#[cfg(feature = "stats")]
 pub static WORKER_STATS: [CachePadded<WorkerStats>; MAX_WORKERS] =
     [const { CachePadded::new(WorkerStats::new()) }; MAX_WORKERS];
 #[cfg(feature = "stats")]
 pub static PEER_STATS: [CachePadded<WorkerPeerStats>; MAX_WORKERS] =
     [const { CachePadded::new(WorkerPeerStats::new()) }; MAX_WORKERS];
+
+/// Shared statistics across all workers.
+pub struct SharedWorkerStats {
+    pub allocated_paths: AtomicU64,
+}
+
+impl SharedWorkerStats {
+    pub const fn new() -> Self {
+        SharedWorkerStats {
+            allocated_paths: AtomicU64::new(0),
+        }
+    }
+}
 
 /// Per-worker statistics.
 #[derive(Default)]
@@ -79,6 +95,18 @@ impl WorkerPeerStatsSnapshot {
     pub const fn new() -> Self {
         WorkerPeerStatsSnapshot { stolen_from: 0 }
     }
+}
+
+#[cfg(feature = "stats")]
+pub fn print_shared_stats() {
+    let allocated_paths = SHARED_WORKER_STATS
+        .allocated_paths
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    println!(
+        "Shared Worker Stats:\n  Allocated Decision Paths: {}",
+        allocated_paths.to_formatted_string(&Locale::en)
+    );
 }
 
 #[cfg(feature = "stats")]
@@ -272,7 +300,8 @@ fn format_duration(micros: u64) -> String {
 #[macro_export]
 macro_rules! stats {
     // Matches: stats!(id, |local, peer| { ... })
-    ($id:expr, |$local:ident, $peers:ident| $code:block) => {{
+    ($id:expr, |$shared: ident, $local:ident, $peers:ident| $code:block) => {{
+        let $shared = &crate::worker::stats::SHARED_WORKER_STATS;
         let $local = unsafe { crate::worker::stats::WORKER_STATS.get_unchecked($id) };
         let $peers = &crate::worker::stats::PEER_STATS;
         $code
@@ -282,5 +311,5 @@ macro_rules! stats {
 #[cfg(not(feature = "stats"))]
 #[macro_export]
 macro_rules! stats {
-    ($id:expr, |$local:ident, $peers:ident| $code:block) => {};
+    ($id:expr, |$shared:ident, $local:ident, $peers:ident| $code:block) => {};
 }

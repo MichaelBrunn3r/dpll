@@ -166,9 +166,7 @@ impl PartialAssignment {
     }
 
     /// Extracts the current sequence of variable assignment decisions into the provided buffer.
-    pub fn extract_decision(&self) -> Vec<(VariableId, bool)> {
-        let mut buffer = Vec::new();
-
+    pub fn extract_decisions_into(&self, buffer: &mut Vec<(VariableId, bool)>) {
         // first, extract the initial decisions
         for i in 0..self.initial_decision_level {
             let var = self.history[i];
@@ -189,8 +187,6 @@ impl PartialAssignment {
             self.decision_level(),
             self.initial_decision_level
         );
-
-        buffer
     }
 
     /// Returns the value of the last decision made, or None if no decisions have been made.

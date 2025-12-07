@@ -247,6 +247,7 @@ impl WorkerPool {
                 &mut prev_stats,
                 &mut prev_peer_stats,
             );
+            crate::worker::stats::print_shared_stats();
         }
 
         result
@@ -349,6 +350,7 @@ impl SubProblem {
 
 /// A sequence of variable assignment decisions made during search.
 /// Can be stolen by idle workers and helps them reconstruct search states.
+#[derive(Debug)]
 pub struct DecisionPath {
     /// The sequence of variable assignments (variable ID and assigned value).
     pub decisions: Vec<(VariableId, bool)>,

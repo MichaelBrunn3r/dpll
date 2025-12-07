@@ -138,3 +138,15 @@ impl Backoff {
         self.spins += 1;
     }
 }
+
+pub trait VecExt<T> {
+    fn ensure_capacity(&mut self, min: usize);
+}
+
+impl<T> VecExt<T> for Vec<T> {
+    fn ensure_capacity(&mut self, min: usize) {
+        if self.capacity() < min {
+            self.reserve(min - self.capacity());
+        }
+    }
+}
