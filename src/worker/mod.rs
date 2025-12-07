@@ -2,6 +2,7 @@ use crate::{clause::Lit, dpll::DPLLSolver, problem::Problem};
 use std::sync::atomic::{self};
 
 pub mod core;
+pub mod stats;
 pub mod stealing;
 
 pub trait WorkerStrategy {

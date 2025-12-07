@@ -112,11 +112,11 @@ impl WorkerPool {
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| *i != worker_id)
-                .map(|(_, stealer)| stealer.clone())
+                .map(|(peer_id, stealer)| (stealer.clone(), peer_id))
                 .collect();
 
             workers.push(thread::spawn(move || {
-                let behavior = StealingWorker::new(local_queue, peer_queues);
+                let behavior = StealingWorker::new(worker_id, local_queue, peer_queues);
                 WorkerCore::new(
                     worker_id,
                     num_active_workers,
@@ -196,21 +196,52 @@ impl WorkerPool {
 
         drop(tx);
 
-        loop {
+        #[cfg(feature = "stats")]
+        let mut prev_stats_print = std::time::Instant::now();
+        #[cfg(feature = "stats")]
+        let mut prev_stats = Vec::new();
+        #[cfg(feature = "stats")]
+        let mut prev_peer_stats = Vec::new();
+        let result = loop {
             // Check if we have received a solution
             if let Ok(solution) = rx.try_recv() {
-                return Some(solution);
+                break Some(solution);
+            }
+
+            // Periodically print worker stats
+            #[cfg(feature = "stats")]
+            {
+                if prev_stats_print.elapsed() >= std::time::Duration::from_secs(1) {
+                    crate::worker::stats::print_worker_stats_summary(
+                        self.num_workers,
+                        &mut prev_stats,
+                        &mut prev_peer_stats,
+                    );
+                    prev_stats_print = std::time::Instant::now();
+                }
             }
 
             let num_idle = self.active_workers.load(atomic::Ordering::Acquire);
             let pending_subproblems = job_sender.len();
 
             if num_idle == self.num_workers && pending_subproblems == 0 {
-                return None; // UNSAT
+                break None; // UNSAT
             }
 
             std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+
+        // Print final worker stats summary
+        #[cfg(feature = "stats")]
+        {
+            crate::worker::stats::print_worker_stats_summary(
+                self.num_workers,
+                &mut prev_stats,
+                &mut prev_peer_stats,
+            );
         }
+
+        result
     }
 
     /// Calculate depth required to generate at least `num_workers` initial assignments.

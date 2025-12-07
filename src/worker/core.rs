@@ -114,6 +114,7 @@ impl<B: WorkerStrategy> WorkerCore<B> {
                         solver = new_solver;
                         self.num_active_workers
                             .fetch_add(1, atomic::Ordering::Release);
+
                         continue;
                     }
 

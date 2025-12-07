@@ -5,22 +5,25 @@ use std::{
 };
 
 use crate::{
-    clause::Lit, dpll::DPLLSolver, pool::DecisionPath, problem::Problem, utils::opt_bool::OptBool,
-    worker::WorkerStrategy,
+    clause::Lit, dpll::DPLLSolver, pool::DecisionPath, problem::Problem, stats,
+    utils::opt_bool::OptBool, worker::WorkerStrategy,
 };
 
 pub struct StealingWorker {
+    _id: usize,
     local_queue: crossbeam_deque::Worker<DecisionPath>,
-    peer_queues: Vec<crossbeam_deque::Stealer<DecisionPath>>,
+    peer_queues: Vec<(crossbeam_deque::Stealer<DecisionPath>, usize)>,
     offer_threshold: usize,
 }
 
 impl StealingWorker {
     pub fn new(
+        id: usize,
         local_queue: crossbeam_deque::Worker<DecisionPath>,
-        peer_queues: Vec<crossbeam_deque::Stealer<DecisionPath>>,
+        peer_queues: Vec<(crossbeam_deque::Stealer<DecisionPath>, usize)>,
     ) -> Self {
         StealingWorker {
+            _id: id,
             local_queue,
             peer_queues,
             offer_threshold: 0,
@@ -28,9 +31,15 @@ impl StealingWorker {
     }
 
     pub fn try_steal_from_peers(&mut self) -> Option<DecisionPath> {
-        for stealer in &self.peer_queues {
+        for (stealer, _peer_id) in &self.peer_queues {
             match stealer.steal() {
                 crossbeam_deque::Steal::Success(path) => {
+                    stats!(self._id, |worker, peers| {
+                        worker.steal.fetch_add(1, atomic::Ordering::Relaxed);
+                        peers[*_peer_id]
+                            .stolen_from
+                            .fetch_add(1, atomic::Ordering::Relaxed);
+                    });
                     return Some(path);
                 }
                 _ => continue,
@@ -54,13 +63,6 @@ impl WorkerStrategy for StealingWorker {
 
         let mut decisions = solver.assignment.extract_decision();
 
-        // info!(
-        //     "[{}] Offer @{} #{}",
-        //     self._id,
-        //     decisions.len(),
-        //     self.level_offered_counts[decisions.len()]
-        // );
-
         // Get the last decision made
         let (_, last_val) = if let Some(last_decision) = decisions.last_mut() {
             last_decision
@@ -69,8 +71,11 @@ impl WorkerStrategy for StealingWorker {
             return;
         };
 
-        *last_val = false;
+        *last_val = false; // Try alternative path (i.e. false)
 
+        stats!(self._id, |worker, peers| {
+            worker.push.fetch_add(1, atomic::Ordering::Relaxed);
+        });
         self.local_queue.push(DecisionPath::from(decisions));
     }
 
@@ -82,7 +87,10 @@ impl WorkerStrategy for StealingWorker {
         solution_found_flag: &atomic::AtomicBool,
         num_active_workers: &atomic::AtomicUsize,
     ) -> Option<(Lit, DPLLSolver<'p>)> {
-        loop {
+        #[cfg(feature = "stats")]
+        let mut prev_awake = std::time::Instant::now();
+
+        let result = loop {
             if let Some(stolen_path) = self.try_steal_from_peers() {
                 let mut init_assignment = vec![OptBool::Unassigned; problem.num_vars];
                 for (var, val) in &stolen_path.decisions {
@@ -97,33 +105,48 @@ impl WorkerStrategy for StealingWorker {
                 let (last_var, last_val) = stolen_path.decisions.last().unwrap();
                 let falsified_lit = Lit::new(*last_var, *last_val).negated();
 
-                // info!(
-                //     "[{}] Stole@{} => continue @{}",
-                //     self._id,
-                //     stolen_path.decisions.len(),
-                //     solver.assignment.decision_level()
-                // );
-                return Some((falsified_lit, solver));
+                break Some((falsified_lit, solver));
             }
 
             if solution_found_flag.load(atomic::Ordering::Acquire)
                 || num_active_workers.load(atomic::Ordering::Acquire) == 0
             {
-                return None;
+                break None;
             }
 
+            stats!(self._id, |worker, peers| {
+                worker.idle_micros.fetch_add(
+                    prev_awake.elapsed().as_micros() as u64,
+                    atomic::Ordering::Relaxed,
+                );
+                prev_awake = std::time::Instant::now();
+            });
             std::thread::sleep(Duration::from_micros(100));
-        }
+        };
+
+        stats!(self._id, |worker, peers| {
+            worker.idle_micros.fetch_add(
+                prev_awake.elapsed().as_micros() as u64,
+                atomic::Ordering::Relaxed,
+            );
+        });
+
+        result
     }
 
     #[inline(always)]
     fn should_stop_backtracking_early(&self, solver: &DPLLSolver) -> bool {
         // Check if the alternative path we offered at this level was stolen.
         // We only offer paths up to offer_threshold, so only check in that range.
-        if solver.assignment.decision_level() <= self.offer_threshold
-            && self.local_queue.pop().is_none()
-        {
-            // The queue is empty => the alternative path was stolen
+        let current_level = solver.assignment.decision_level();
+        if current_level <= self.offer_threshold {
+            stats!(self._id, |worker, peers| {
+                worker.pop.fetch_add(1, atomic::Ordering::Relaxed);
+            });
+            if let Some(_path) = self.local_queue.pop() {
+                return false;
+            }
+
             return true;
         }
         false
