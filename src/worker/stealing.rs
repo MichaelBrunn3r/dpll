@@ -112,9 +112,10 @@ impl WorkerStrategy for StealingWorker {
         num_active_workers: &atomic::AtomicUsize,
     ) -> Option<(Lit, DPLLSolver<'p>)> {
         stats!(self._id, |worker, peers| {
-            assert!(
+            debug_assert!(
                 self.local_queue.is_empty(),
-                "Local queue should be empty when searching for new work"
+                "Expected empty local queue when stealing work, but there are {} paths available.",
+                self.local_queue.len()
             );
             worker.queue_len.store(0, atomic::Ordering::Relaxed);
         });

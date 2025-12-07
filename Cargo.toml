@@ -28,6 +28,8 @@ criterion = "0.8.0"
 default = []
 stats = []
 
+# --- Benchmarks ---
+
 [[bench]]
 name = "bench"
 harness = false
@@ -40,20 +42,22 @@ harness = false
 name = "optbool_unwrap_or"
 harness = false
 
-[profile.perf]
-inherits = "release"
+# --- Profiles ---
+
+[profile.release]
 lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
 rustflags = ["-Ctarget-cpu=native", "-Clink-arg=-fuse-ld=mold"]
 
-[profile.perf_dbg]
-inherits = "perf"
+[profile.dev]
+strip = true
 debug = true
+rustflags = ["-Ctarget-cpu=native", "-Clink-arg=-fuse-ld=mold"]
 
 [profile.flamegraph]
-inherits = "perf"
+inherits = "release"
 debug = true
 strip = false
 rustflags = [
