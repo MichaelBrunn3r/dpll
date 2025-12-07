@@ -3,7 +3,7 @@ use crate::{
     dpll::DPLLSolver,
     generator,
     problem::Problem,
-    utils::opt_bool::OptBool,
+    utils::{Backoff, opt_bool::OptBool},
     worker::{WorkerStrategyType, core::WorkerCore, stealing::StealingWorker},
 };
 use itertools::Itertools;
@@ -14,6 +14,7 @@ use std::{
         mpsc,
     },
     thread::{self, available_parallelism},
+    time::Duration,
     vec,
 };
 
@@ -161,7 +162,7 @@ impl WorkerPool {
 
         // Notify all workers of the new problem
         let solution_found = Arc::new(AtomicBool::new(false));
-        let (tx, rx) = mpsc::channel();
+        let (solution_sender, solution_receiver) = mpsc::channel();
 
         let current_pid = {
             let mut ctx_lock = self.shared_ctx.write().unwrap();
@@ -170,7 +171,7 @@ impl WorkerPool {
             ctx_lock.problem_ctx = Arc::new(ProblemContext {
                 problem: Arc::clone(&problem),
                 solution_found_flag: Arc::clone(&solution_found),
-                solution_sender: tx.clone(),
+                solution_sender: solution_sender.clone(),
             });
             ctx_lock.current_pid
         };
@@ -178,8 +179,6 @@ impl WorkerPool {
         let depth = Self::calculate_depth(self.num_workers, problem.num_vars);
         let split_vars = Arc::new(Self::select_split_vars(&problem, depth));
 
-        self.active_workers
-            .store(self.num_workers, atomic::Ordering::Release);
         for init_assignment in Self::generate_combinations(&problem, &split_vars) {
             // Check if a solution has been found while generating jobs
             if solution_found.load(atomic::Ordering::Acquire) {
@@ -194,7 +193,17 @@ impl WorkerPool {
             }
         }
 
-        drop(tx);
+        drop(solution_sender);
+
+        self.await_result(&job_sender, &solution_receiver)
+    }
+
+    pub fn await_result(
+        &self,
+        job_sender: &crossbeam_channel::Sender<SubProblem>,
+        solution_receiver: &mpsc::Receiver<Vec<bool>>,
+    ) -> Option<Vec<bool>> {
+        let mut backoff = Backoff::new(Duration::from_millis(10));
 
         #[cfg(feature = "stats")]
         let mut prev_stats_print = std::time::Instant::now();
@@ -204,7 +213,7 @@ impl WorkerPool {
         let mut prev_peer_stats = Vec::new();
         let result = loop {
             // Check if we have received a solution
-            if let Ok(solution) = rx.try_recv() {
+            if let Ok(solution) = solution_receiver.try_recv() {
                 break Some(solution);
             }
 
@@ -221,14 +230,13 @@ impl WorkerPool {
                 }
             }
 
-            let num_idle = self.active_workers.load(atomic::Ordering::Acquire);
+            let num_active = self.active_workers.load(atomic::Ordering::Acquire);
             let pending_subproblems = job_sender.len();
-
-            if num_idle == self.num_workers && pending_subproblems == 0 {
-                break None; // UNSAT
+            if num_active == 0 && pending_subproblems == 0 {
+                break None;
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            backoff.wait();
         };
 
         // Print final worker stats summary

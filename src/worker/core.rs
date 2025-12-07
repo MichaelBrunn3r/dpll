@@ -118,6 +118,9 @@ impl<B: WorkerStrategy> WorkerCore<B> {
                         continue;
                     }
 
+                    // run() expects us to be active when we return
+                    self.num_active_workers
+                        .fetch_add(1, atomic::Ordering::Release);
                     break;
                 }
             }

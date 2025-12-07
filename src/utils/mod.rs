@@ -91,3 +91,50 @@ impl NonExhaustingCursor {
         }
     }
 }
+
+/// A utility that manages a tiered, capped backoff strategy for non-blocking polls.
+pub struct Backoff {
+    spins: usize,
+    current_sleep: Duration,
+    max_sleep: Duration,
+}
+
+/// A tiered backoff strategy for non-blocking polls.
+/// The strategy consists of three tiers:
+/// 1. Spinning: The thread will spin for a fixed number of iterations.
+/// 2. Yielding: The thread will yield to the scheduler for a fixed number of iterations.
+/// 3. Sleeping: The thread will sleep for an exponentially increasing duration, capped at a maximum.
+impl Backoff {
+    /// Maximum number of spin iterations before yielding.
+    const SPIN_LIMIT: usize = 100;
+    /// Maximum number of yields before sleeping.
+    const YIELD_LIMIT: usize = 200;
+    /// Initial sleep duration.
+    const INITIAL_SLEEP: Duration = Duration::from_micros(50);
+    /// Multiplier for exponential backoff.
+    const SLEEP_MULTIPLIER: f32 = 1.5;
+
+    /// Creates a new Backoff instance with the specified maximum sleep duration.
+    pub fn new(max_sleep: Duration) -> Self {
+        Backoff {
+            spins: 0,
+            current_sleep: Self::INITIAL_SLEEP,
+            max_sleep,
+        }
+    }
+
+    pub fn wait(&mut self) {
+        if self.spins < Self::SPIN_LIMIT {
+            std::hint::spin_loop();
+        } else if self.spins < Self::YIELD_LIMIT {
+            std::thread::yield_now();
+        } else {
+            std::thread::sleep(self.current_sleep);
+
+            let next_sleep = self.current_sleep.as_secs_f32() * Self::SLEEP_MULTIPLIER;
+
+            self.current_sleep = Duration::from_secs_f32(next_sleep).min(self.max_sleep);
+        }
+        self.spins += 1;
+    }
+}
