@@ -72,8 +72,15 @@ impl WorkerStrategy for StealingWorker {
 
         let level = solver.assignment.decision_level();
 
+        let current_q_len = self.local_queue.len();
+        stats!(self._id, |worker, peers| {
+            worker
+                .queue_len
+                .store(current_q_len as u64, atomic::Ordering::Relaxed);
+        });
+
         // Only offer if we're past the threshold AND the queue has space.
-        if level > self.offer_threshold || self.local_queue.len() >= self.queue_limit {
+        if level > self.offer_threshold || current_q_len >= self.queue_limit {
             return;
         }
 
@@ -104,6 +111,14 @@ impl WorkerStrategy for StealingWorker {
         solution_found_flag: &atomic::AtomicBool,
         num_active_workers: &atomic::AtomicUsize,
     ) -> Option<(Lit, DPLLSolver<'p>)> {
+        stats!(self._id, |worker, peers| {
+            assert!(
+                self.local_queue.is_empty(),
+                "Local queue should be empty when searching for new work"
+            );
+            worker.queue_len.store(0, atomic::Ordering::Relaxed);
+        });
+
         #[cfg(feature = "stats")]
         let mut prev_awake = std::time::Instant::now();
 

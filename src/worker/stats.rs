@@ -19,6 +19,7 @@ pub struct WorkerStats {
     pub pop: AtomicU64,
     pub steal: AtomicU64,
     pub idle_micros: AtomicU64,
+    pub queue_len: AtomicU64,
 }
 
 impl WorkerStats {
@@ -28,6 +29,7 @@ impl WorkerStats {
             pop: AtomicU64::new(0),
             steal: AtomicU64::new(0),
             idle_micros: AtomicU64::new(0),
+            queue_len: AtomicU64::new(0),
         }
     }
 }
@@ -38,6 +40,7 @@ pub struct WorkerStatsSnapshot {
     pub pop: u64,
     pub steal: u64,
     pub idle_micros: u64,
+    pub queue_len: u64,
 }
 
 impl WorkerStatsSnapshot {
@@ -47,6 +50,7 @@ impl WorkerStatsSnapshot {
             pop: 0,
             steal: 0,
             idle_micros: 0,
+            queue_len: 0,
         }
     }
 }
@@ -132,7 +136,7 @@ pub fn print_worker_stats_summary(
     table
         .load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY)
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec!["ID", "Push/Pop/Stolen", "Steal", "Idle"]);
+        .set_header(vec!["ID", "Q-Len", "Push/Pop/Stolen", "Steal", "Idle"]);
 
     for column in table.column_iter_mut() {
         column.set_padding((0, 0));
@@ -147,6 +151,7 @@ pub fn print_worker_stats_summary(
     let mut t_s_delta = 0;
     let mut t_idle = 0;
     let mut t_i_delta = 0;
+    let mut t_queue_len = 0;
 
     // Totals for peer stats
     let mut t_stolen_from = 0;
@@ -163,6 +168,7 @@ pub fn print_worker_stats_summary(
         let cur_pop = slot.pop.load(std::sync::atomic::Ordering::Relaxed);
         let cur_steal = slot.steal.load(std::sync::atomic::Ordering::Relaxed);
         let cur_idle = slot.idle_micros.load(std::sync::atomic::Ordering::Relaxed);
+        let cur_q_len = slot.queue_len.load(std::sync::atomic::Ordering::Relaxed);
 
         let d_push = cur_push.saturating_sub(stats_snapshots[i].push);
         let d_pop = cur_pop.saturating_sub(stats_snapshots[i].pop);
@@ -173,6 +179,7 @@ pub fn print_worker_stats_summary(
         stats_snapshots[i].pop = cur_pop;
         stats_snapshots[i].steal = cur_steal;
         stats_snapshots[i].idle_micros = cur_idle;
+        stats_snapshots[i].queue_len = cur_q_len;
 
         // --- Peer Stats (Stolen From) ---
         let cur_sf = peer_slot
@@ -191,6 +198,7 @@ pub fn print_worker_stats_summary(
         t_s_delta += d_steal;
         t_idle += cur_idle;
         t_i_delta += d_idle;
+        t_queue_len += cur_q_len;
 
         t_stolen_from += cur_sf;
         t_sf_delta += d_sf;
@@ -202,6 +210,7 @@ pub fn print_worker_stats_summary(
 
         table.add_row(vec![
             Cell::new(i),
+            Cell::new(cur_q_len),
             Cell::new(s_combined),
             Cell::new(s_steal),
             Cell::new(s_idle),
@@ -222,6 +231,7 @@ pub fn print_worker_stats_summary(
 
     table.add_row(vec![
         Cell::new("Σ"),
+        Cell::new(t_queue_len),
         Cell::new(tot_combined),
         Cell::new(tot_steal),
         Cell::new(tot_idle),
