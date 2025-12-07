@@ -1,6 +1,7 @@
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use crossbeam_deque::Worker;
 use crossbeam_utils::CachePadded;
+use num_format::{Locale, ToFormattedString};
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
@@ -101,22 +102,32 @@ pub fn print_worker_stats_summary(
 
     let fmt_combined =
         |push: u64, d_push: u64, pop: u64, d_pop: u64, stolen: u64, d_stolen: u64| -> String {
-            let base = format!("{}/{}/{}", push, pop, stolen);
+            let base = format!("{}/{}/{}", fmt_u64(push), fmt_u64(pop), fmt_u64(stolen));
             if d_push > 0 || d_pop > 0 || d_stolen > 0 {
                 format!(
-                    "{} {}+{}/{}/{}{}",
-                    base, GREEN, d_push, d_pop, d_stolen, RESET
+                    "{base} {}+{}/{}/{}{}",
+                    GREEN,
+                    fmt_u64(d_push),
+                    fmt_u64(d_pop),
+                    fmt_u64(d_stolen),
+                    RESET
                 )
             } else {
                 base
             }
         };
 
+    fn fmt_u64(n: u64) -> String {
+        n.to_formatted_string(&Locale::en)
+    }
+
     let fmt_count = |val: u64, delta: u64| -> String {
+        let v = fmt_u64(val);
+        let d = fmt_u64(delta);
         if delta > 0 {
-            format!("{} {}+{}{}", val, GREEN, delta, RESET)
+            format!("{v} {}+{d}{}", GREEN, RESET)
         } else {
-            val.to_string()
+            v
         }
     };
 
@@ -210,7 +221,7 @@ pub fn print_worker_stats_summary(
 
         table.add_row(vec![
             Cell::new(i),
-            Cell::new(cur_q_len),
+            Cell::new(fmt_u64(cur_q_len)),
             Cell::new(s_combined),
             Cell::new(s_steal),
             Cell::new(s_idle),
@@ -231,7 +242,7 @@ pub fn print_worker_stats_summary(
 
     table.add_row(vec![
         Cell::new("Σ"),
-        Cell::new(t_queue_len),
+        Cell::new(fmt_u64(t_queue_len)),
         Cell::new(tot_combined),
         Cell::new(tot_steal),
         Cell::new(tot_idle),
@@ -240,6 +251,7 @@ pub fn print_worker_stats_summary(
     println!("\n{table}");
 }
 
+#[cfg(feature = "stats")]
 fn format_duration(micros: u64) -> String {
     if micros >= 60_000_000 {
         // Minutes
