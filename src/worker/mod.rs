@@ -24,24 +24,3 @@ pub trait WorkerStrategy {
 
 pub struct BasicWorker {}
 impl WorkerStrategy for BasicWorker {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WorkerStrategyType {
-    Basic,
-    Stealing,
-}
-
-impl std::str::FromStr for WorkerStrategyType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "basic" => Ok(WorkerStrategyType::Basic),
-            "stealing" => Ok(WorkerStrategyType::Stealing),
-            _ => Err(format!(
-                "Unknown strategy: {}. Use 'basic' or 'stealing'",
-                s
-            )),
-        }
-    }
-}

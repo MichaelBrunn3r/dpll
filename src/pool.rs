@@ -4,7 +4,7 @@ use crate::{
     generator,
     problem::Problem,
     utils::{Backoff, opt_bool::OptBool},
-    worker::{WorkerStrategyType, core::WorkerCore, stealing::StealingWorker},
+    worker::{core::WorkerCore, stealing::StealingWorker},
 };
 use itertools::Itertools;
 use std::{
@@ -27,7 +27,7 @@ pub struct WorkerPool {
 }
 
 impl WorkerPool {
-    pub fn new(num_workers: usize, strategy: WorkerStrategyType) -> Self {
+    pub fn new(num_workers: usize, steal: bool) -> Self {
         // Limit number of workers to available parallelism
         let num_workers = num_workers.min(available_parallelism().map(|n| n.get()).unwrap_or(1));
         if num_workers <= 1 {
@@ -44,23 +44,20 @@ impl WorkerPool {
         // Spawn worker threads
         let mut workers = Vec::with_capacity(num_workers);
         let num_active_workers = Arc::new(AtomicUsize::new(0));
-        match strategy {
-            WorkerStrategyType::Basic => {
-                Self::start_basic_workers(
-                    &mut workers,
-                    subproblem_receiver,
-                    &num_active_workers,
-                    &shared_ctx,
-                );
-            }
-            WorkerStrategyType::Stealing => {
-                Self::start_stealing_workers(
-                    &mut workers,
-                    subproblem_receiver,
-                    &num_active_workers,
-                    &shared_ctx,
-                );
-            }
+        if steal {
+            Self::start_stealing_workers(
+                &mut workers,
+                subproblem_receiver,
+                &num_active_workers,
+                &shared_ctx,
+            );
+        } else {
+            Self::start_basic_workers(
+                &mut workers,
+                subproblem_receiver,
+                &num_active_workers,
+                &shared_ctx,
+            );
         }
 
         Self {
