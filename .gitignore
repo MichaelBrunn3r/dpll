@@ -13,3 +13,4 @@ devenv.local.nix
 flamegraph.svg
 perf.*
 .git.zip
+heaptrack*
