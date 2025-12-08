@@ -117,33 +117,39 @@ pub struct Lit(pub u32);
 impl Lit {
     const INVALID: Lit = Lit(u32::MAX);
 
-    #[inline]
+    #[inline(always)]
     pub fn new(var: usize, is_pos: bool) -> Self {
         Lit((var as u32) << 1 | (!is_pos as u32))
     }
 
     /// Returns the variable ID (0-based) of the literal.
+    #[inline(always)]
     pub fn var(self) -> usize {
         (self.0 >> 1) as usize
     }
 
     /// Returns true if the variable is positive.
+    #[inline(always)]
     pub fn is_pos(self) -> bool {
         (self.0 & 1) == 0
     }
 
     /// Returns true if the variable is negative (negated).
+    #[inline(always)]
     pub fn is_neg(self) -> bool {
         (self.0 & 1) == 1
     }
 
-    /// Returns the negated version of this literal.
+    /// Returns the same literal but negative.
+    #[inline(always)]
     pub fn negated(self) -> Self {
-        Lit(self.0 ^ 1)
+        Lit::new(self.var(), false)
     }
 
-    pub fn negated_var(var: VariableId) -> usize {
-        (var << 1) | 1
+    /// Returns the inverse (negation) of the literal.
+    #[inline(always)]
+    pub fn inverted(self) -> Self {
+        Lit(self.0 ^ 1)
     }
 
     /// Evaluates the literal given a boolean value for its variable.

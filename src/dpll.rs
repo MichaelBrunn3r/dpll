@@ -110,7 +110,7 @@ impl<'a> DPLLSolver<'a> {
                             self.assignment.propagate(var, unit_literal.is_pos());
 
                             // Unit literal is now true => its negation is false
-                            self.falsified_lits_buffer.push(unit_literal.negated());
+                            self.falsified_lits_buffer.push(unit_literal.inverted());
                         }
                     }
                 }
@@ -137,7 +137,7 @@ impl<'a> DPLLSolver<'a> {
 
         self.assignment.decide(decision_var);
         // Return the negated literal of the assigned decision variable
-        return Lit::new(decision_var, true).negated();
+        return Lit::new(decision_var, true).inverted();
     }
 }
 

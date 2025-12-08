@@ -1,5 +1,4 @@
 use crate::{
-    clause::VariableId,
     dpll::DPLLSolver,
     generator,
     problem::Problem,
@@ -342,19 +341,5 @@ impl SubProblem {
             pid,
             init_assignment,
         }
-    }
-}
-
-/// A sequence of variable assignment decisions made during search.
-/// Can be stolen by idle workers and helps them reconstruct search states.
-#[derive(Debug)]
-pub struct DecisionPath {
-    /// The sequence of variable assignments (variable ID and assigned value).
-    pub decisions: Vec<(VariableId, bool)>,
-}
-
-impl From<Vec<(VariableId, bool)>> for DecisionPath {
-    fn from(decisions: Vec<(VariableId, bool)>) -> Self {
-        Self { decisions }
     }
 }

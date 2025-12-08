@@ -166,18 +166,18 @@ impl PartialAssignment {
     }
 
     /// Extracts the current sequence of variable assignment decisions into the provided buffer.
-    pub fn extract_decisions_into(&self, buffer: &mut Vec<(VariableId, bool)>) {
+    pub fn extract_decisions_into(&self, buffer: &mut Vec<Lit>) {
         // first, extract the initial decisions
         for i in 0..self.initial_decision_level {
             let var = self.history[i];
             let val = self.current_state[var].unwrap();
-            buffer.push((var, val));
+            buffer.push(Lit::new(var, val)); // repurpose lit to store var + val
         }
 
         for &decision_idx in &self.decision_marks {
             let var = self.history[decision_idx];
             let val = self.current_state[var].unwrap();
-            buffer.push((var, val));
+            buffer.push(Lit::new(var, val));
         }
 
         debug_assert!(

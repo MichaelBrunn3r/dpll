@@ -9,7 +9,6 @@ use std::{
 use crate::{
     clause::Lit,
     dpll::DPLLSolver,
-    pool::DecisionPath,
     problem::Problem,
     stats,
     utils::{VecExt, opt_bool::OptBool},
@@ -77,9 +76,7 @@ impl StealingWorker {
                     .fetch_add(1, atomic::Ordering::Relaxed);
             });
 
-            Arc::new(DecisionPath {
-                decisions: Vec::with_capacity(self.offer_threshold + 1),
-            })
+            Arc::new(DecisionPath(Vec::with_capacity(self.offer_threshold + 1)))
         })
     }
 }
@@ -100,14 +97,14 @@ impl WorkerStrategy for StealingWorker {
         // Ensure all paths in the pool have enough capacity
         for path in self.path_pool.iter_mut() {
             if let Some(path) = Arc::get_mut(path) {
-                path.decisions.ensure_capacity(problem.num_vars);
+                path.0.ensure_capacity(problem.num_vars);
             }
         }
 
         // Fill the path pool up to the queue limit
         while self.path_pool.len() < self.queue_limit {
             let decisions = Vec::with_capacity(problem.num_vars);
-            self.path_pool.push(Arc::new(DecisionPath { decisions }));
+            self.path_pool.push(Arc::new(DecisionPath(decisions)));
         }
     }
 
@@ -131,28 +128,28 @@ impl WorkerStrategy for StealingWorker {
             return;
         }
 
-        let mut path = self.get_or_create_decision_path();
-        let mut decisions = &mut Arc::get_mut(&mut path)
+        let mut path_ref = self.get_or_create_decision_path();
+        let mut path = &mut Arc::get_mut(&mut path_ref)
             .expect("Invariant violated: Pooled Arc has multiple owners")
-            .decisions;
-        decisions.clear();
-        solver.assignment.extract_decisions_into(&mut decisions);
+            .0;
+        path.clear();
+        solver.assignment.extract_decisions_into(&mut path);
 
         // Get the last decision made
-        let (_, last_val) = if let Some(last_decision) = decisions.last_mut() {
+        let last_lit = if let Some(last_decision) = path.last_mut() {
             last_decision
         } else {
             // No decisions made yet
-            self.path_pool.push(path); // Return to pool
+            self.path_pool.push(path_ref); // Return to pool
             return;
         };
 
-        *last_val = false; // Try alternative path (i.e. false)
+        *last_lit = last_lit.negated(); // Try alternative path (i.e. false)
 
         stats!(self._id, |shared, worker, peers| {
             worker.push.fetch_add(1, atomic::Ordering::Relaxed);
         });
-        self.local_queue.push(path);
+        self.local_queue.push(path_ref);
         self.deepest_offered_level = level;
     }
 
@@ -179,17 +176,14 @@ impl WorkerStrategy for StealingWorker {
         let result = loop {
             if let Some(stolen_path) = self.try_steal_from_peers() {
                 let mut init_assignment = vec![OptBool::Unassigned; problem.num_vars];
-                for (var, val) in &stolen_path.decisions {
-                    init_assignment[*var] = OptBool::from(*val);
+                for lit in &stolen_path.0 {
+                    init_assignment[lit.var() as usize] = OptBool::from(lit.is_pos());
                 }
 
-                let solver = DPLLSolver::with_assignment(
-                    &problem,
-                    init_assignment,
-                    stolen_path.decisions.len(),
-                );
-                let (last_var, last_val) = stolen_path.decisions.last().unwrap();
-                let falsified_lit = Lit::new(*last_var, *last_val).negated();
+                let solver =
+                    DPLLSolver::with_assignment(&problem, init_assignment, stolen_path.0.len());
+                let last_lit = stolen_path.0.last().unwrap();
+                let falsified_lit = last_lit.inverted();
 
                 self.path_pool.push(stolen_path);
                 break Some((falsified_lit, solver));
@@ -243,11 +237,22 @@ impl WorkerStrategy for StealingWorker {
                 worker.pop.fetch_add(1, atomic::Ordering::Relaxed);
             });
 
-            self.deepest_offered_level = path.decisions.len() - 1;
+            self.deepest_offered_level = path.0.len() - 1;
             self.path_pool.push(path);
             return false;
         }
 
         true
+    }
+}
+
+/// A sequence of variable assignment decisions made during search.
+/// Can be stolen by idle workers and helps them reconstruct search states.
+#[derive(Debug)]
+pub struct DecisionPath(pub Vec<Lit>);
+
+impl From<Vec<Lit>> for DecisionPath {
+    fn from(decisions: Vec<Lit>) -> Self {
+        Self(decisions)
     }
 }
