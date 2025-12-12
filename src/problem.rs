@@ -5,6 +5,7 @@ use crate::{
     constants::{MAX_CLAUSES_PER_LIT, MAX_CLAUSES_PER_VAR},
 };
 
+#[derive(Debug, Clone)]
 pub struct Problem {
     pub num_vars: usize,
     pub clauses: Vec<Clause>,

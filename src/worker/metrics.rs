@@ -1,9 +1,15 @@
+#[cfg(feature = "metrics")]
 use crossbeam_utils::CachePadded;
-use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::Path;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
-use std::time::Instant;
+#[cfg(feature = "metrics")]
+use std::{
+    fs::{File, OpenOptions},
+    io::{BufWriter, Write},
+    sync::atomic::Ordering,
+    time::Instant,
+};
 
 // -------------
 // --- State ---
@@ -28,6 +34,7 @@ static INTERACTION_STATS: [CachePadded<InteractionMetrics>; MAX_WORKERS] =
 
 /// Record that a worker successfully stole a path from another worker
 #[inline(always)]
+#[allow(unused)]
 pub fn record_stole_from(thief: usize, victim: usize) {
     #[cfg(feature = "metrics")]
     {
@@ -42,6 +49,7 @@ pub fn record_stole_from(thief: usize, victim: usize) {
 
 /// Record that a worker attempted to steal but found no work
 #[inline(always)]
+#[allow(unused)]
 pub fn record_failed_to_steal(worker_id: usize) {
     #[cfg(feature = "metrics")]
     {
@@ -53,6 +61,7 @@ pub fn record_failed_to_steal(worker_id: usize) {
 
 /// Record that a worker had its work stolen by another worker and thus stopped backtracking early
 #[inline(always)]
+#[allow(unused)]
 pub fn record_work_was_stolen(worker_id: usize) {
     #[cfg(feature = "metrics")]
     {
@@ -75,6 +84,7 @@ pub fn record_allocated_path() {
 
 /// Record the current length of a worker's local queue
 #[inline(always)]
+#[allow(unused)]
 pub fn record_queue_length(worker_id: usize, len: u64) {
     #[cfg(feature = "metrics")]
     {
@@ -106,6 +116,7 @@ pub fn record_queue_length(worker_id: usize, len: u64) {
 
 /// Record that a path was not put into the queue due to exceeding the offer threshold
 #[inline(always)]
+#[allow(unused)]
 pub fn record_path_exceeds_offer_threshold(worker_id: usize) {
     #[cfg(feature = "metrics")]
     {
@@ -117,6 +128,7 @@ pub fn record_path_exceeds_offer_threshold(worker_id: usize) {
 
 /// Record that a worker pushed a path into its local queue
 #[inline(always)]
+#[allow(unused)]
 pub fn record_push_into_queue(worker_id: usize) {
     #[cfg(feature = "metrics")]
     {
@@ -128,6 +140,7 @@ pub fn record_push_into_queue(worker_id: usize) {
 
 /// Record that a worker popped a path from its local queue
 #[inline(always)]
+#[allow(unused)]
 pub fn record_pop_from_queue(worker_id: usize) {
     #[cfg(feature = "metrics")]
     {
@@ -142,6 +155,7 @@ pub fn record_pop_from_queue(worker_id: usize) {
 
 /// Record that no path was pushed into the queue because it was full
 #[inline(always)]
+#[allow(unused)]
 pub fn record_queue_full(worker_id: usize) {
     #[cfg(feature = "metrics")]
     {
@@ -152,6 +166,7 @@ pub fn record_queue_full(worker_id: usize) {
 }
 
 #[inline(always)]
+#[allow(unused)]
 pub fn record_idle_for(worker_id: usize, micros: u64) {
     #[cfg(feature = "metrics")]
     {

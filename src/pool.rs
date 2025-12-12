@@ -1,11 +1,12 @@
 use crate::{
     dpll::DPLLSolver,
-    generator,
+    generator, if_metrics,
     problem::Problem,
     utils::{Backoff, opt_bool::OptBool},
     worker::{core::WorkerCore, metrics::MetricsLogger, stealing::StealingWorker},
 };
 use itertools::Itertools;
+#[cfg(feature = "metrics")]
 use log::{error, info};
 use std::{
     sync::{
@@ -221,9 +222,11 @@ impl WorkerPool {
             backoff.wait();
         };
 
-        match logger.close() {
-            Ok(filename) => info!("Saved captured metrics to '{}'", filename),
-            Err(e) => error!("Failed to close metrics logger: {}", e),
+        if_metrics! {
+            match logger.close() {
+                Ok(filename) => info!("Saved captured metrics to '{}'", filename),
+                Err(e) => error!("Failed to close metrics logger: {}", e),
+            }
         }
 
         result
