@@ -9,10 +9,10 @@ use std::{
 use crate::{
     clause::Lit,
     dpll::DPLLSolver,
+    if_metrics,
     problem::Problem,
-    stats,
     utils::{VecExt, opt_bool::OptBool},
-    worker::WorkerStrategy,
+    worker::{WorkerStrategy, metrics},
 };
 
 pub struct StealingWorker {
@@ -37,7 +37,7 @@ impl StealingWorker {
         local_queue: crossbeam_deque::Worker<Arc<DecisionPath>>,
         peer_queues: Vec<(crossbeam_deque::Stealer<Arc<DecisionPath>>, usize)>,
     ) -> Self {
-        let queue_limit = 10;
+        let queue_limit = 5;
 
         StealingWorker {
             _id: id,
@@ -51,18 +51,13 @@ impl StealingWorker {
     }
 
     pub fn try_steal_from_peers(&mut self) -> Option<Arc<DecisionPath>> {
-        for (stealer, _peer_id) in &self.peer_queues {
+        for (stealer, peer_id) in &self.peer_queues {
             match stealer.steal() {
                 crossbeam_deque::Steal::Success(path) => {
-                    stats!(self._id, |shared, worker, peers| {
-                        worker.steal.fetch_add(1, atomic::Ordering::Relaxed);
-                        peers[*_peer_id]
-                            .stolen_from
-                            .fetch_add(1, atomic::Ordering::Relaxed);
-                    });
+                    metrics::record_stole_from(self._id, *peer_id);
                     return Some(path);
                 }
-                _ => continue,
+                _ => metrics::record_failed_to_steal(self._id),
             }
         }
         None
@@ -70,12 +65,7 @@ impl StealingWorker {
 
     fn get_or_create_decision_path(&mut self) -> Arc<DecisionPath> {
         self.path_pool.pop().unwrap_or_else(|| {
-            stats!(self._id, |shared, worker, peers| {
-                shared
-                    .allocated_paths
-                    .fetch_add(1, atomic::Ordering::Relaxed);
-            });
-
+            metrics::record_allocated_path();
             Arc::new(DecisionPath(Vec::with_capacity(self.offer_threshold + 1)))
         })
     }
@@ -115,16 +105,17 @@ impl WorkerStrategy for StealingWorker {
         }
 
         let level = solver.assignment.decision_level();
-
         let current_q_len = self.local_queue.len();
-        stats!(self._id, |shared, worker, peers| {
-            worker
-                .queue_len
-                .store(current_q_len as u64, atomic::Ordering::Relaxed);
-        });
+        metrics::record_queue_length(self._id, current_q_len as u64);
+
+        if level > self.offer_threshold {
+            metrics::record_path_exceeds_offer_threshold(self._id);
+            return;
+        }
 
         // Only offer if we're past the threshold AND the queue has space.
-        if level > self.offer_threshold || current_q_len >= self.queue_limit {
+        if current_q_len >= self.queue_limit {
+            metrics::record_queue_full(self._id);
             return;
         }
 
@@ -146,9 +137,7 @@ impl WorkerStrategy for StealingWorker {
 
         *last_lit = last_lit.negated(); // Try alternative path (i.e. false)
 
-        stats!(self._id, |shared, worker, peers| {
-            worker.push.fetch_add(1, atomic::Ordering::Relaxed);
-        });
+        metrics::record_push_into_queue(self._id);
         self.local_queue.push(path_ref);
         self.deepest_offered_level = level;
     }
@@ -166,12 +155,7 @@ impl WorkerStrategy for StealingWorker {
             "Expected empty local queue when stealing work, but there are {} paths available.",
             self.local_queue.len()
         );
-        stats!(self._id, |shared, worker, peers| {
-            worker.queue_len.store(0, atomic::Ordering::Relaxed);
-        });
-
-        #[cfg(feature = "stats")]
-        let mut prev_awake = std::time::Instant::now();
+        if_metrics! { let mut prev_awake = std::time::Instant::now();};
 
         let result = loop {
             if let Some(stolen_path) = self.try_steal_from_peers() {
@@ -195,23 +179,14 @@ impl WorkerStrategy for StealingWorker {
                 break None;
             }
 
-            stats!(self._id, |shared, worker, peers| {
-                worker.idle_micros.fetch_add(
-                    prev_awake.elapsed().as_micros() as u64,
-                    atomic::Ordering::Relaxed,
-                );
+            if_metrics! {
+                metrics::record_idle_for(self._id, prev_awake.elapsed().as_micros() as u64);
                 prev_awake = std::time::Instant::now();
-            });
+            };
             std::thread::sleep(Duration::from_micros(100));
         };
 
-        stats!(self._id, |shared, worker, peers| {
-            worker.idle_micros.fetch_add(
-                prev_awake.elapsed().as_micros() as u64,
-                atomic::Ordering::Relaxed,
-            );
-        });
-
+        if_metrics! { metrics::record_idle_for(self._id, prev_awake.elapsed().as_micros() as u64);}
         result
     }
 
@@ -233,15 +208,14 @@ impl WorkerStrategy for StealingWorker {
         // Check if the alternative path we offered at this level was stolen.
         // We only offer paths up to offer_threshold, so only check in that range.
         if let Some(path) = self.local_queue.pop() {
-            stats!(self._id, |shared, worker, peers| {
-                worker.pop.fetch_add(1, atomic::Ordering::Relaxed);
-            });
+            metrics::record_pop_from_queue(self._id);
 
             self.deepest_offered_level = path.0.len() - 1;
             self.path_pool.push(path);
             return false;
         }
 
+        metrics::record_work_was_stolen(self._id);
         true
     }
 }

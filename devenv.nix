@@ -9,10 +9,14 @@
     git
     perf
     heaptrack
-    (pkgs.python3.withPackages (ps: [
-      ps.networkx
-      ps.pyparsing
-    ]))
+    (pkgs.python3.withPackages (ps:
+      with ps; [
+        networkx
+        pyparsing
+        numpy
+        matplotlib
+        plotly
+      ]))
   ];
   languages = {
     rust = {
@@ -28,4 +32,7 @@
       };
     };
   };
+
+  # Optional: Create a handy alias to run the plotter
+  scripts.plot-stats.exec = "python plot_metrics.py";
 }

@@ -26,7 +26,7 @@ criterion = "0.8.0"
 
 [features]
 default = []
-stats = []
+metrics = []
 
 # --- Benchmarks ---
 

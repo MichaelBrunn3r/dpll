@@ -3,9 +3,10 @@ use crate::{
     generator,
     problem::Problem,
     utils::{Backoff, opt_bool::OptBool},
-    worker::{core::WorkerCore, stealing::StealingWorker},
+    worker::{core::WorkerCore, metrics::MetricsLogger, stealing::StealingWorker},
 };
 use itertools::Itertools;
+use log::{error, info};
 use std::{
     sync::{
         Arc, RwLock,
@@ -200,50 +201,29 @@ impl WorkerPool {
         solution_receiver: &mpsc::Receiver<Vec<bool>>,
     ) -> Option<Vec<bool>> {
         let mut backoff = Backoff::new(Duration::from_millis(10));
+        let mut logger = MetricsLogger::new("metrics.bin", Duration::from_millis(100))
+            .expect("Failed to initialize logger");
 
-        #[cfg(feature = "stats")]
-        let mut prev_stats_print = std::time::Instant::now();
-        #[cfg(feature = "stats")]
-        let mut prev_stats = Vec::new();
-        #[cfg(feature = "stats")]
-        let mut prev_peer_stats = Vec::new();
         let result = loop {
-            // Check if we have received a solution
+            // Check if we have received a solution => SAT
             if let Ok(solution) = solution_receiver.try_recv() {
                 break Some(solution);
             }
 
-            // Periodically print worker stats
-            #[cfg(feature = "stats")]
-            {
-                if prev_stats_print.elapsed() >= std::time::Duration::from_secs(1) {
-                    crate::worker::stats::print_worker_stats_summary(
-                        self.num_workers,
-                        &mut prev_stats,
-                        &mut prev_peer_stats,
-                    );
-                    prev_stats_print = std::time::Instant::now();
-                }
-            }
-
+            // Check if all workers are idle => UNSAT
             let num_active = self.active_workers.load(atomic::Ordering::Acquire);
             let pending_subproblems = job_sender.len();
             if num_active == 0 && pending_subproblems == 0 {
                 break None;
             }
 
+            logger.tick();
             backoff.wait();
         };
 
-        // Print final worker stats summary
-        #[cfg(feature = "stats")]
-        {
-            crate::worker::stats::print_worker_stats_summary(
-                self.num_workers,
-                &mut prev_stats,
-                &mut prev_peer_stats,
-            );
-            crate::worker::stats::print_shared_stats();
+        match logger.close() {
+            Ok(filename) => info!("Saved captured metrics to '{}'", filename),
+            Err(e) => error!("Failed to close metrics logger: {}", e),
         }
 
         result
