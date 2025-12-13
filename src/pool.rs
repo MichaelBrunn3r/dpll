@@ -201,7 +201,13 @@ impl WorkerPool {
         job_sender: &crossbeam_channel::Sender<SubProblem>,
         solution_receiver: &mpsc::Receiver<Vec<bool>>,
     ) -> Option<Vec<bool>> {
-        let mut backoff = Backoff::new(Duration::from_millis(10));
+        let mut backoff = Backoff::new(
+            128,
+            512,
+            Duration::from_micros(1),
+            Duration::from_millis(10),
+            1.1,
+        );
         let mut logger = MetricsLogger::new("metrics.bin", Duration::from_millis(100))
             .expect("Failed to initialize logger");
 

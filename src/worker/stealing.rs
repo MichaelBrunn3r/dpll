@@ -11,7 +11,7 @@ use crate::{
     dpll::DPLLSolver,
     if_metrics,
     problem::Problem,
-    utils::{VecExt, opt_bool::OptBool},
+    utils::{Backoff, VecExt, find_coprime_to, opt_bool::OptBool},
     worker::{WorkerStrategy, metrics},
 };
 
@@ -29,6 +29,12 @@ pub struct StealingWorker {
     deepest_offered_level: usize,
     /// Path pool
     path_pool: Vec<Arc<DecisionPath>>,
+    /// Backoff strategy for stealing attempts.
+    steal_backoff: Backoff,
+    /// Index of the last successful victim to steal from.
+    last_victim_idx: usize,
+    /// Stride for selecting the next victim to steal from.
+    steal_stride: usize,
 }
 
 impl StealingWorker {
@@ -37,7 +43,9 @@ impl StealingWorker {
         local_queue: crossbeam_deque::Worker<Arc<DecisionPath>>,
         peer_queues: Vec<(crossbeam_deque::Stealer<Arc<DecisionPath>>, usize)>,
     ) -> Self {
-        let queue_limit = 5;
+        let queue_limit = 1;
+        let steal_stride = find_coprime_to(id, peer_queues.len());
+        let last_victim_idx = id % peer_queues.len();
 
         StealingWorker {
             _id: id,
@@ -47,19 +55,36 @@ impl StealingWorker {
             queue_limit,
             deepest_offered_level: 0,
             path_pool: Vec::with_capacity(queue_limit),
+            steal_backoff: Backoff::new(
+                8,
+                16,
+                Duration::from_micros(1),
+                Duration::from_millis(12),
+                1.2,
+            ),
+            last_victim_idx,
+            steal_stride,
         }
     }
 
     pub fn try_steal_from_peers(&mut self) -> Option<Arc<DecisionPath>> {
-        for (stealer, peer_id) in &self.peer_queues {
+        let num_peers = self.peer_queues.len();
+        let mut victim_idx = self.last_victim_idx;
+        for _ in 0..num_peers {
+            let (stealer, peer_id) = &self.peer_queues[victim_idx];
             match stealer.steal() {
                 crossbeam_deque::Steal::Success(path) => {
                     metrics::record_stole_from(self._id, *peer_id);
+                    self.last_victim_idx = victim_idx;
                     return Some(path);
                 }
-                _ => metrics::record_failed_to_steal(self._id),
+                _ => {}
             }
+
+            victim_idx = (victim_idx + self.steal_stride) % num_peers;
         }
+
+        metrics::record_failed_to_steal(self._id);
         None
     }
 
@@ -74,7 +99,11 @@ impl StealingWorker {
 impl WorkerStrategy for StealingWorker {
     #[inline(always)]
     fn on_new_problem(&mut self, problem: &Problem) {
-        self.offer_threshold = 15.min(problem.num_vars / 2);
+        let min_subproblem_size = 113;
+        self.offer_threshold = problem
+            .num_vars
+            .saturating_sub(min_subproblem_size)
+            .max(problem.num_vars / 8);
         self.deepest_offered_level = 0;
 
         // Clear local queue into the path pool
@@ -159,6 +188,7 @@ impl WorkerStrategy for StealingWorker {
 
         let result = loop {
             if let Some(stolen_path) = self.try_steal_from_peers() {
+                self.steal_backoff.reset();
                 let mut init_assignment = vec![OptBool::Unassigned; problem.num_vars];
                 for lit in &stolen_path.0 {
                     init_assignment[lit.var() as usize] = OptBool::from(lit.is_pos());
@@ -183,7 +213,7 @@ impl WorkerStrategy for StealingWorker {
                 metrics::record_idle_for(self._id, prev_awake.elapsed().as_micros() as u64);
                 prev_awake = std::time::Instant::now();
             };
-            std::thread::sleep(Duration::from_micros(100));
+            self.steal_backoff.wait();
         };
 
         if_metrics! { metrics::record_idle_for(self._id, prev_awake.elapsed().as_micros() as u64);}

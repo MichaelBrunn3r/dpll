@@ -96,21 +96,9 @@ pub fn record_queue_length(worker_id: usize, len: u64) {
             metrics.max_queue_len.store(len, Ordering::Relaxed);
         }
 
-        // Update Running Average
-        if len > 0 {
-            let len_f = len as f64;
-            const ALPHA: f64 = 0.01;
-            let old_bits = metrics.avg_non_empty_queue_len.load(Ordering::Relaxed);
-            let new_avg = if old_bits == 0 {
-                len_f
-            } else {
-                let old_val = f64::from_bits(old_bits);
-                old_val + ALPHA * (len_f - old_val)
-            };
-            metrics
-                .avg_non_empty_queue_len
-                .store(new_avg.to_bits(), Ordering::Relaxed);
-        }
+        // Update Sum and Count for Average
+        metrics.queue_len_sum.fetch_add(len, Ordering::Relaxed);
+        metrics.queue_len_count.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -289,10 +277,12 @@ impl MetricsLogger {
             let p_stats = &INTERACTION_STATS[i];
 
             let max_queue_len = w_stats.max_queue_len.swap(0, Ordering::Relaxed);
-            let avg_queue_len = if max_queue_len == 0 {
-                0.0
+            let sum = w_stats.queue_len_sum.swap(0, Ordering::Relaxed);
+            let count = w_stats.queue_len_count.swap(0, Ordering::Relaxed);
+            let avg_queue_len = if count > 0 {
+                sum as f64 / count as f64
             } else {
-                f64::from_bits(w_stats.avg_non_empty_queue_len.load(Ordering::Relaxed))
+                0.0
             };
 
             row.workers[i] = WorkerLogData {
@@ -301,7 +291,7 @@ impl MetricsLogger {
                 steal: w_stats.steal.load(Ordering::Relaxed),
                 idle_micros: w_stats.idle_micros.load(Ordering::Relaxed),
                 max_queue_len,
-                avg_queue_len,
+                avg_queue_len, // Computed exact average
                 early_backtracks: w_stats.early_backtracks.load(Ordering::Relaxed),
                 self_consumed: w_stats.self_consumed.load(Ordering::Relaxed),
                 failed_steals: w_stats.failed_steals.load(Ordering::Relaxed),
@@ -355,7 +345,8 @@ pub struct WorkerMetrics {
     pub steal: AtomicU64,
     pub idle_micros: AtomicU64,
     pub max_queue_len: AtomicU64,
-    pub avg_non_empty_queue_len: AtomicU64, // Stored as f64 bits
+    pub queue_len_sum: AtomicU64,
+    pub queue_len_count: AtomicU64,
     pub early_backtracks: AtomicU64,
     pub self_consumed: AtomicU64,
     pub failed_steals: AtomicU64,
@@ -371,7 +362,8 @@ impl WorkerMetrics {
             steal: AtomicU64::new(0),
             idle_micros: AtomicU64::new(0),
             max_queue_len: AtomicU64::new(0),
-            avg_non_empty_queue_len: AtomicU64::new(0),
+            queue_len_sum: AtomicU64::new(0),
+            queue_len_count: AtomicU64::new(0),
             early_backtracks: AtomicU64::new(0),
             self_consumed: AtomicU64::new(0),
             failed_steals: AtomicU64::new(0),

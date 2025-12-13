@@ -94,9 +94,14 @@ impl NonExhaustingCursor {
 
 /// A utility that manages a tiered, capped backoff strategy for non-blocking polls.
 pub struct Backoff {
-    spins: usize,
+    num_spins: usize,
+    spin_limit: usize,
+    num_yields: usize,
+    yield_limit: usize,
+    initial_sleep: Duration,
     current_sleep: Duration,
-    max_sleep: Duration,
+    sleep_limit: Duration,
+    sleep_multiplier: f32,
 }
 
 /// A tiered backoff strategy for non-blocking polls.
@@ -105,37 +110,46 @@ pub struct Backoff {
 /// 2. Yielding: The thread will yield to the scheduler for a fixed number of iterations.
 /// 3. Sleeping: The thread will sleep for an exponentially increasing duration, capped at a maximum.
 impl Backoff {
-    /// Maximum number of spin iterations before yielding.
-    const SPIN_LIMIT: usize = 100;
-    /// Maximum number of yields before sleeping.
-    const YIELD_LIMIT: usize = 200;
-    /// Initial sleep duration.
-    const INITIAL_SLEEP: Duration = Duration::from_micros(50);
-    /// Multiplier for exponential backoff.
-    const SLEEP_MULTIPLIER: f32 = 1.5;
-
     /// Creates a new Backoff instance with the specified maximum sleep duration.
-    pub fn new(max_sleep: Duration) -> Self {
+    pub fn new(
+        spin_limit: usize,
+        yield_limit: usize,
+        initial_sleep: Duration,
+        sleep_limit: Duration,
+        sleep_multiplier: f32,
+    ) -> Self {
         Backoff {
-            spins: 0,
-            current_sleep: Self::INITIAL_SLEEP,
-            max_sleep,
+            num_spins: 0,
+            spin_limit,
+            num_yields: 0,
+            yield_limit,
+            initial_sleep,
+            current_sleep: initial_sleep,
+            sleep_limit,
+            sleep_multiplier,
         }
     }
 
     pub fn wait(&mut self) {
-        if self.spins < Self::SPIN_LIMIT {
+        if self.num_spins < self.spin_limit {
             std::hint::spin_loop();
-        } else if self.spins < Self::YIELD_LIMIT {
+            self.num_spins += 1;
+        } else if self.num_yields < self.yield_limit {
             std::thread::yield_now();
+            self.num_yields += 1;
         } else {
             std::thread::sleep(self.current_sleep);
 
-            let next_sleep = self.current_sleep.as_secs_f32() * Self::SLEEP_MULTIPLIER;
+            let next_sleep = self.current_sleep.as_secs_f32() * self.sleep_multiplier;
 
-            self.current_sleep = Duration::from_secs_f32(next_sleep).min(self.max_sleep);
+            self.current_sleep = Duration::from_secs_f32(next_sleep).min(self.sleep_limit);
         }
-        self.spins += 1;
+    }
+
+    pub fn reset(&mut self) {
+        self.num_spins = 0;
+        self.num_yields = 0;
+        self.current_sleep = self.initial_sleep;
     }
 }
 
@@ -149,4 +163,28 @@ impl<T> VecExt<T> for Vec<T> {
             self.reserve(min - self.capacity());
         }
     }
+}
+
+pub const PRIMES: [usize; 60] = [
+    2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97,
+    101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193,
+    197, 199, 211, 223, 227, 229, 233, 239, 241, 251, 257, 263, 269, 271, 277, 281,
+];
+
+/// Finds a prime number that is coprime to the given number.
+/// The search starts at the nth prime (start_offset).
+/// If no coprime prime is found, returns 1.
+pub fn find_coprime_to(start_offset: usize, num: usize) -> usize {
+    if num <= 1 {
+        return 1;
+    }
+
+    for i in 0..PRIMES.len() {
+        let prime: usize = PRIMES[(start_offset + i) % PRIMES.len()];
+        let is_coprime = num % prime != 0;
+        if is_coprime {
+            return prime;
+        }
+    }
+    1
 }
