@@ -1,17 +1,15 @@
 use crate::{
     clause::{ClauseState, Lit},
-    constants::MAX_FALSIFIED_LITS,
     partial_assignment::PartialAssignment,
     problem::Problem,
     utils::{NonExhaustingCursor, opt_bool::OptBool},
 };
-use stackvector::StackVec;
 
 pub struct DPLLSolver<'a> {
     problem: &'a Problem,
     pub assignment: PartialAssignment,
     /// Reusable buffer for literals that have just been falsified during unit propagation.
-    falsified_lits_buffer: StackVec<[Lit; MAX_FALSIFIED_LITS]>,
+    falsified_lits_buffer: Vec<Lit>,
     /// Cursor to keep track of which variable to consider next for branching decisions.
     decision_candidate_cursor: NonExhaustingCursor,
 }
@@ -33,7 +31,7 @@ impl<'a> DPLLSolver<'a> {
                 initial_assignment,
                 initial_decision_level,
             ),
-            falsified_lits_buffer: StackVec::new(),
+            falsified_lits_buffer: Vec::new(),
             decision_candidate_cursor: NonExhaustingCursor::new(),
         }
     }

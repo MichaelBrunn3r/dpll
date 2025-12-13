@@ -1,12 +1,9 @@
-use crate::{
-    constants::MAX_LITS_PER_CLAUSE, partial_assignment::PartialAssignment, utils::opt_bool::OptBool,
-};
-use stackvector::StackVec;
+use crate::{partial_assignment::PartialAssignment, utils::opt_bool::OptBool};
 use std::ops::{Deref, DerefMut};
 
 /// A view of a clauses literals.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Clause(pub StackVec<[Lit; MAX_LITS_PER_CLAUSE]>);
+pub struct Clause(pub Vec<Lit>);
 
 impl Clause {
     /// Checks if a clause is a tautology (contains both a literal and its negation).
@@ -78,7 +75,7 @@ impl Clause {
 }
 
 impl Deref for Clause {
-    type Target = StackVec<[Lit; MAX_LITS_PER_CLAUSE]>;
+    type Target = Vec<Lit>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

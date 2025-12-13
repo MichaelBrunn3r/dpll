@@ -1,5 +1,5 @@
-use dpll::{dpll::DPLLSolver, parser::parse_dimacs_cnf, utils::opt_bool::OptBool};
-use std::io::Read;
+use dpll::{parser::parse_dimacs_cnf, pool::WorkerPool};
+use std::{io::Read, num::NonZero, sync::Arc, thread::available_parallelism};
 
 pub fn main() -> Result<(), String> {
     let mut data = Vec::new();
@@ -10,10 +10,11 @@ pub fn main() -> Result<(), String> {
     let problem =
         parse_dimacs_cnf(&data).map_err(|e| format!("Failed to parse DIMACS CNF input: {}", e))?;
 
-    let assignment = vec![OptBool::Unassigned; problem.num_vars];
-    let mut solver = DPLLSolver::with_assignment(&problem, assignment, 0);
-
-    match solver.solve() {
+    let num_workers = available_parallelism()
+        .unwrap_or(NonZero::new(1).unwrap())
+        .get();
+    let pool = WorkerPool::new(num_workers, true);
+    match pool.submit(Arc::new(problem)) {
         None => {
             println!("s UNSATISFIABLE");
         }

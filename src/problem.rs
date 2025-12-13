@@ -1,18 +1,13 @@
-use stackvector::StackVec;
-
-use crate::{
-    clause::{Clause, Lit, VariableId},
-    constants::{MAX_CLAUSES_PER_LIT, MAX_CLAUSES_PER_VAR},
-};
+use crate::clause::{Clause, Lit, VariableId};
 
 #[derive(Debug, Clone)]
 pub struct Problem {
     pub num_vars: usize,
     pub clauses: Vec<Clause>,
     /// Maps each variable to the list of clauses it appears in.
-    pub var2clauses: Vec<StackVec<[ClauseID; MAX_CLAUSES_PER_VAR]>>,
+    pub var2clauses: Vec<Vec<ClauseID>>,
     /// Maps each literal to the list of clauses it appears in.
-    pub lit2clauses: Vec<StackVec<[ClauseID; MAX_CLAUSES_PER_LIT]>>,
+    pub lit2clauses: Vec<Vec<ClauseID>>,
     /// Jeroslow-Wang scores for each variable.
     pub var_scores: Vec<f64>,
     /// Variables sorted by their Jeroslow-Wang scores in descending order.
@@ -30,8 +25,8 @@ impl Problem {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        let mut lit2clauses = vec![StackVec::new(); num_vars * 2];
-        let mut var2clauses = vec![StackVec::new(); num_vars];
+        let mut lit2clauses = vec![Vec::new(); num_vars * 2];
+        let mut var2clauses = vec![Vec::new(); num_vars];
 
         for (clause_id, clause) in clauses.iter().enumerate() {
             for lit in &clause.0 {
