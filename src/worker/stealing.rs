@@ -90,7 +90,7 @@ impl StealingWorker {
 
     fn get_or_create_decision_path(&mut self) -> Arc<DecisionPath> {
         self.path_pool.pop().unwrap_or_else(|| {
-            metrics::record_allocated_path();
+            metrics::record_allocated_path(self._id);
             Arc::new(DecisionPath(Vec::with_capacity(self.offer_threshold + 1)))
         })
     }

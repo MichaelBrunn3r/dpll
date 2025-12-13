@@ -8,7 +8,7 @@ use crate::{
     dpll::{DPLLSolver, SolverAction},
     partial_assignment::BacktrackResult,
     pool::{ProblemContext, SharedContext, SubProblem},
-    worker::WorkerStrategy,
+    worker::{WorkerStrategy, metrics},
 };
 
 pub struct WorkerCore<S: WorkerStrategy> {
@@ -92,6 +92,8 @@ impl<B: WorkerStrategy> WorkerCore<B> {
                     self.strat.after_decision(&solver);
                 }
                 SolverAction::Backtrack => {
+                    metrics::record_conflict(self._id);
+
                     if let Some(new_falsified_lit) = self.backtrack(&mut solver) {
                         falsified_lit = new_falsified_lit;
                         continue;

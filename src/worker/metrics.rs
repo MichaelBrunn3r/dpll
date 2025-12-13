@@ -18,9 +18,6 @@ use std::{
 pub const MAX_WORKERS: usize = 16;
 
 #[cfg(feature = "metrics")]
-static SHARED_METRICS: CachePadded<SharedMetrics> = CachePadded::new(SharedMetrics::new());
-
-#[cfg(feature = "metrics")]
 static PER_WORKER_METRICS: [CachePadded<WorkerMetrics>; MAX_WORKERS] =
     [const { CachePadded::new(WorkerMetrics::new()) }; MAX_WORKERS];
 
@@ -73,10 +70,10 @@ pub fn record_work_was_stolen(worker_id: usize) {
 
 /// Record that a path was allocated because the local pool was empty
 #[inline(always)]
-pub fn record_allocated_path() {
+pub fn record_allocated_path(worker_id: usize) {
     #[cfg(feature = "metrics")]
     {
-        SHARED_METRICS
+        PER_WORKER_METRICS[worker_id]
             .allocated_paths
             .fetch_add(1, Ordering::Relaxed);
     }
@@ -164,6 +161,16 @@ pub fn record_idle_for(worker_id: usize, micros: u64) {
     }
 }
 
+#[inline(always)]
+pub fn record_conflict(worker_id: usize) {
+    #[cfg(feature = "metrics")]
+    {
+        PER_WORKER_METRICS[worker_id]
+            .conflicts
+            .fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 // --------------
 // --- Macros ---
 // --------------
@@ -208,6 +215,7 @@ pub struct MetricsLogger {}
 pub struct LogRow {
     pub timestamp_ms: u64,
     pub global_allocated_paths: u64,
+    pub global_conflicts: u64,
     pub workers: [WorkerLogData; MAX_WORKERS],
 }
 
@@ -220,13 +228,15 @@ pub struct WorkerLogData {
     pub steal: u64,
     pub idle_micros: u64,
     pub max_queue_len: u64,
-    pub avg_queue_len: f64, // Decoded from bits
+    pub avg_queue_len: f64,
     pub early_backtracks: u64,
     pub self_consumed: u64,
     pub failed_steals: u64,
     pub rejected_depth: u64,
     pub rejected_full: u64,
-    pub stolen_from: u64, // From PEER_STATS
+    pub stolen_from: u64,
+    pub conflicts: u64,
+    pub allocated_paths: u64,
 }
 
 #[cfg(feature = "metrics")]
@@ -265,16 +275,19 @@ impl MetricsLogger {
     fn capture(&mut self) -> std::io::Result<()> {
         let elapsed = self.start_time.elapsed().as_millis() as u64;
 
-        let mut row = LogRow {
-            timestamp_ms: elapsed,
-            global_allocated_paths: SHARED_METRICS.allocated_paths.load(Ordering::Relaxed),
-            workers: [WorkerLogData::default(); MAX_WORKERS],
-        };
+        let mut total_allocated = 0;
+        let mut total_conflicts = 0;
+        let mut worker_data = [WorkerLogData::default(); MAX_WORKERS];
 
         // Gather per-worker metrics
         for i in 0..MAX_WORKERS {
             let w_stats = &PER_WORKER_METRICS[i];
             let p_stats = &INTERACTION_STATS[i];
+
+            let w_alloc = w_stats.allocated_paths.load(Ordering::Relaxed);
+            let w_conflicts = w_stats.conflicts.load(Ordering::Relaxed);
+            total_allocated += w_alloc;
+            total_conflicts += w_conflicts;
 
             let max_queue_len = w_stats.max_queue_len.swap(0, Ordering::Relaxed);
             let sum = w_stats.queue_len_sum.swap(0, Ordering::Relaxed);
@@ -285,7 +298,7 @@ impl MetricsLogger {
                 0.0
             };
 
-            row.workers[i] = WorkerLogData {
+            worker_data[i] = WorkerLogData {
                 push: w_stats.push.load(Ordering::Relaxed),
                 pop: w_stats.pop.load(Ordering::Relaxed),
                 steal: w_stats.steal.load(Ordering::Relaxed),
@@ -298,8 +311,17 @@ impl MetricsLogger {
                 rejected_depth: w_stats.rejected_depth.load(Ordering::Relaxed),
                 rejected_full: w_stats.rejected_full.load(Ordering::Relaxed),
                 stolen_from: p_stats.stolen_from.load(Ordering::Relaxed),
+                conflicts: w_conflicts,
+                allocated_paths: w_alloc,
             };
         }
+
+        let row = LogRow {
+            timestamp_ms: elapsed,
+            global_allocated_paths: total_allocated,
+            global_conflicts: total_conflicts,
+            workers: worker_data,
+        };
 
         // Write the row as raw bytes
         let ptr = &row as *const LogRow as *const u8;
@@ -352,6 +374,8 @@ pub struct WorkerMetrics {
     pub failed_steals: AtomicU64,
     pub rejected_depth: AtomicU64,
     pub rejected_full: AtomicU64,
+    pub conflicts: AtomicU64,
+    pub allocated_paths: AtomicU64,
 }
 
 impl WorkerMetrics {
@@ -369,6 +393,8 @@ impl WorkerMetrics {
             failed_steals: AtomicU64::new(0),
             rejected_depth: AtomicU64::new(0),
             rejected_full: AtomicU64::new(0),
+            conflicts: AtomicU64::new(0),
+            allocated_paths: AtomicU64::new(0),
         }
     }
 }

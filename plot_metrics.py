@@ -12,14 +12,14 @@ import numpy.typing as npt
 
 class MetricsData(TypedDict):
     timestamps:   npt.NDArray[np.float64]
-    # Rates (Events per tick)
+    rate_conflicts: npt.NDArray[np.int64]
+    final_conflicts: int
     rate_push:    npt.NDArray[np.int64]
     rate_pop:     npt.NDArray[np.int64]
     rate_steal:   npt.NDArray[np.int64]
     rate_fail:    npt.NDArray[np.int64]
     rate_early:   npt.NDArray[np.int64]
     rate_self:    npt.NDArray[np.int64]
-    # Gauges (Snapshots)
     avg_q_max:    npt.NDArray[np.float64]
 
 # Match the Rust struct layout exactly
@@ -36,12 +36,15 @@ worker_dtype = np.dtype([
     ('rejected_depth', 'u8'),
     ('rejected_full', 'u8'),
     ('stolen_from', 'u8'),
+    ('conflicts', 'u8'),       
+    ('allocated_paths', 'u8'),
 ])
 
 def load_and_process_data(filename: str, max_workers: int) -> Optional[MetricsData]:
     log_row_dtype = np.dtype([
         ('timestamp_ms', 'u8'),
         ('global_allocated_paths', 'u8'),
+        ('global_conflicts', 'u8'),
         ('workers', worker_dtype, (max_workers,))
     ])
 
@@ -93,8 +96,13 @@ def load_and_process_data(filename: str, max_workers: int) -> Optional[MetricsDa
     # Average of the "Max Queue Length" seen by workers in this tick
     avg_q_max = np.mean(workers['max_queue_len'], axis=1)
 
+    total_conflicts_accum = valid_rows['global_conflicts']
+    rate_conflicts = np.diff(total_conflicts_accum, prepend=0)
+
     return {
         "timestamps": timestamps,
+        "rate_conflicts": rate_conflicts,      
+        "final_conflicts": total_conflicts_accum[-1], 
         "rate_push": rate_push,
         "rate_pop": rate_pop,
         "rate_steal": rate_steal,
@@ -148,6 +156,10 @@ def plot_data(metrics: MetricsData, max_workers: int) -> None:
         x=t, y=metrics["rate_self"], name='Self Consumed',
         line=dict(color='#ff7f0e') # Orange
     ), row=3, col=1)
+    fig.add_trace(go.Scatter(
+        x=t, y=metrics["rate_conflicts"], name='Global Conflicts/Tick',
+        line=dict(color='black', width=2)
+    ), row=3, col=1)
 
     # --- Row 4: Queue Health ---
     fig.add_trace(go.Scatter(
@@ -181,7 +193,15 @@ parser.add_argument("filename", nargs="?", default="metrics.bin", help="Path to 
 parser.add_argument("--workers", "-w", type=int, default=16, help="Max workers (must match Rust const)")
 args = parser.parse_args()
 
-if __name__ == "__main__":
+def main():
     metrics = load_and_process_data(args.filename, args.workers)
-    if metrics:
-        plot_data(metrics, args.workers)
+    if not metrics:
+        return
+
+    print("-" * 40)
+    print(f"Total Conflicts Found: {metrics['final_conflicts']:,}")
+    print("-" * 40)
+    plot_data(metrics, args.workers)
+
+if __name__ == "__main__":
+    main()
