@@ -23,9 +23,9 @@ pub struct StealingWorker {
     /// Queues of peer workers to steal from, along with their IDs.
     peer_queues: Vec<(crossbeam_deque::Stealer<Arc<DecisionPath>>, usize)>,
     /// The decision level up to which to offer alternative paths to peers.
-    offer_threshold: usize,
+    max_offer_depth: usize,
     /// Maximum number of decision levels to keep in the local queue.
-    queue_limit: usize,
+    queue_capacity: usize,
     /// The deepest decision level that has been offered to peers.
     deepest_offered_level: usize,
     /// Path pool
@@ -52,8 +52,8 @@ impl StealingWorker {
             _id: id,
             local_queue,
             peer_queues,
-            offer_threshold: 0,
-            queue_limit,
+            max_offer_depth: 0,
+            queue_capacity: queue_limit,
             deepest_offered_level: 0,
             path_pool: Vec::with_capacity(queue_limit),
             steal_backoff: Backoff::new(
@@ -92,7 +92,7 @@ impl StealingWorker {
     fn get_or_create_decision_path(&mut self) -> Arc<DecisionPath> {
         self.path_pool.pop().unwrap_or_else(|| {
             metrics::record_allocated_path(self._id);
-            Arc::new(DecisionPath(Vec::with_capacity(self.offer_threshold + 1)))
+            Arc::new(DecisionPath(Vec::with_capacity(self.max_offer_depth + 1)))
         })
     }
 }
@@ -101,18 +101,10 @@ impl WorkerStrategy for StealingWorker {
     #[inline(always)]
     fn on_new_problem(&mut self, problem: &Problem) {
         let min_subproblem_size = 113;
-        self.offer_threshold = problem
+        self.max_offer_depth = problem
             .num_vars
             .saturating_sub(min_subproblem_size)
             .max(problem.num_vars / 8);
-        self.deepest_offered_level = 0;
-
-        // Clear local queue into the path pool
-        while let Some(path) = self.local_queue.pop() {
-            if self.path_pool.len() < self.queue_limit {
-                self.path_pool.push(path);
-            }
-        }
 
         // Ensure all paths in the pool have enough capacity
         for path in self.path_pool.iter_mut() {
@@ -122,29 +114,42 @@ impl WorkerStrategy for StealingWorker {
         }
 
         // Fill the path pool up to the queue limit
-        while self.path_pool.len() < self.queue_limit {
+        while self.path_pool.len() < self.queue_capacity {
             let decisions = Vec::with_capacity(problem.num_vars);
             self.path_pool.push(Arc::new(DecisionPath(decisions)));
         }
     }
 
     #[inline(always)]
+    fn on_new_subproblem(&mut self, solver: &DPLLSolver) {
+        self.deepest_offered_level = solver.assignment.decision_level();
+
+        // Clear local queue into the path pool
+        while let Some(path) = self.local_queue.pop() {
+            if self.path_pool.len() < self.queue_capacity {
+                self.path_pool.push(path);
+            }
+        }
+    }
+
+    #[inline(always)]
     fn after_decision(&mut self, solver: &DPLLSolver) {
         if solver.assignment.last_decision() != OptBool::True {
-            return;
+            return; // We are on the 'false' branch => can't offer alternative path
         }
 
         let level = solver.assignment.decision_level();
         let current_q_len = self.local_queue.len();
         metrics::record_queue_length(self._id, current_q_len as u64);
 
-        if level > self.offer_threshold {
+        // Don't offer if we are too deep into the search tree. This would only result in dust.
+        if level > self.max_offer_depth {
             metrics::record_path_exceeds_offer_threshold(self._id);
             return;
         }
 
-        // Only offer if we're past the threshold AND the queue has space.
-        if current_q_len >= self.queue_limit {
+        // Don't offer if our local queue is full.
+        if current_q_len >= self.queue_capacity {
             metrics::record_queue_full(self._id);
             return;
         }
@@ -227,7 +232,7 @@ impl WorkerStrategy for StealingWorker {
         let current_level = solver.assignment.decision_level();
 
         // Only check levels we actually offered.
-        if current_level > self.offer_threshold || current_level > self.deepest_offered_level {
+        if current_level > self.max_offer_depth || current_level > self.deepest_offered_level {
             return false;
         }
 

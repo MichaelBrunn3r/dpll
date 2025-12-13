@@ -59,6 +59,8 @@ impl<B: WorkerStrategy> WorkerCore<B> {
         let ctx = &self.local_problem_ctx.clone();
 
         let mut solver = DPLLSolver::with_decisions(&ctx.problem, &subproblem.initial_decision);
+        self.strat.on_new_subproblem(&solver);
+
         let mut falsified_lit = solver.make_branching_decision();
         self.strat.after_decision(&solver);
 
@@ -112,6 +114,7 @@ impl<B: WorkerStrategy> WorkerCore<B> {
                         solver = new_solver;
                         self.num_active_workers
                             .fetch_add(1, atomic::Ordering::Release);
+                        self.strat.on_new_subproblem(&solver);
 
                         continue;
                     }

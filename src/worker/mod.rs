@@ -7,6 +7,7 @@ pub mod stealing;
 
 pub trait WorkerStrategy {
     fn on_new_problem(&mut self, _problem: &Problem) {}
+    fn on_new_subproblem(&mut self, _solver: &DPLLSolver) {}
     fn after_decision(&mut self, _solver: &DPLLSolver) {}
     fn find_new_work<'p>(
         &mut self,
