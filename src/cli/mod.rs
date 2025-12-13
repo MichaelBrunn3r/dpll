@@ -100,8 +100,6 @@ pub struct Stats {
     pub durations: Vec<Duration>,
     pub parse_durations: Vec<Duration>,
     pub solve_durations: Vec<Duration>,
-    pub verified_count: usize,
-    pub failed_verifications: usize,
 }
 
 impl Stats {
@@ -114,32 +112,20 @@ impl Stats {
             durations: Vec::new(),
             parse_durations: Vec::new(),
             solve_durations: Vec::new(),
-            verified_count: 0,
-            failed_verifications: 0,
         }
     }
 
     /// Prints a summary of the collected statistics.
     pub fn print_summary(&self) {
         info!("\n---\nSummary:");
-        if self.verified_count > 0 || self.failed_verifications > 0 {
-            info!(
-                "#Files  | SAT/UNSAT/Verified | ERR\n{:<7} | {:^18} | {:^3}",
-                self.processed,
-                format!(
-                    "{}/{}/{}",
-                    self.sat_count, self.unsat_count, self.verified_count
-                ),
-                self.errors
-            );
-        } else {
-            info!(
-                "#Files  | SAT/UNSAT | ERR\n{:<7} | {:^9} | {:^3}",
-                self.processed,
-                format!("{}/{}", self.sat_count, self.unsat_count),
-                self.errors
-            );
-        }
+
+        info!(
+            "#Files  | SAT/UNSAT | ERR\n{:<7} | {:^9} | {:^3}",
+            self.processed,
+            format!("{}/{}", self.sat_count, self.unsat_count),
+            self.errors
+        );
+
         self.print_duration_stats("Parsing times:", &self.parse_durations);
         self.print_duration_stats("Solving times:", &self.solve_durations);
     }

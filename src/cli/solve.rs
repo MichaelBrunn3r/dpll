@@ -98,10 +98,7 @@ fn solve_file(
         // Validate the solution
         if validate_solution {
             if let Err(msg) = problem.verify_solution(&solution) {
-                warn!("Solution verification failed: {}", msg);
-                stats.failed_verifications += 1;
-            } else {
-                stats.verified_count += 1;
+                panic!("Solution verification failed: {}", msg);
             }
         }
 

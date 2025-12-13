@@ -272,11 +272,11 @@ impl WorkerPool {
 
         generator!(move || {
             for combination in 0..combinations {
-                let mut decisions = Vec::with_capacity(split_vars.len());
+                let mut decisions = DecisionPath(Vec::with_capacity(split_vars.len()));
 
                 for (bit_idx, &var) in split_vars.iter().enumerate() {
                     let val = (combination & (1 << bit_idx)) != 0;
-                    decisions.push(Lit::new(var, val));
+                    decisions.0.push(Lit::new(var, val));
                 }
 
                 // Check if any clause containing split vars is unsatisfied
@@ -287,7 +287,7 @@ impl WorkerPool {
                     continue; // Skip this assignment as it leads to unsatisfied clauses
                 }
 
-                yield DecisionPath(decisions);
+                yield decisions;
             }
         })
     }
@@ -350,5 +350,11 @@ impl DecisionPath {
 impl From<Vec<Lit>> for DecisionPath {
     fn from(decisions: Vec<Lit>) -> Self {
         Self(decisions)
+    }
+}
+
+impl From<Vec<i32>> for DecisionPath {
+    fn from(value: Vec<i32>) -> Self {
+        DecisionPath(value.iter().map(|&x| Lit::from(x)).collect())
     }
 }

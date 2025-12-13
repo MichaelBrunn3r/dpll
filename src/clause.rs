@@ -1,4 +1,4 @@
-use crate::{partial_assignment::PartialAssignment, utils::opt_bool::OptBool};
+use crate::{partial_assignment::PartialAssignment, pool::DecisionPath, utils::opt_bool::OptBool};
 use std::ops::{Deref, DerefMut};
 
 /// A view of a clauses literals.
@@ -35,21 +35,22 @@ impl Clause {
         })
     }
 
-    pub fn is_unsatisfied_by_decisions(&self, decisions: &[Lit]) -> bool {
-        self.0.iter().all(|&lit| {
-            let var_state = decisions.iter().find(|&&d| d.var() == lit.var());
-            match var_state {
-                Some(d) => d.is_neg(),
-                None => false, // Variable not assigned in decisions
-            }
-        })
-    }
-
     /// Checks if the clause is satisfied by the given partial assignment.
     pub fn is_satisfied_by_partial(&self, part_assignment: &PartialAssignment) -> bool {
         self.0.iter().any(|&lit| {
             let var_state = part_assignment.get_unchecked(lit.var());
             var_state.is_bool(lit.is_pos())
+        })
+    }
+
+    /// Checks if the clause is unsatisfied by the given sequence of decisions.
+    pub fn is_unsatisfied_by_decisions(&self, decisions: &DecisionPath) -> bool {
+        self.0.iter().all(|&lit| {
+            decisions
+                .0
+                .iter()
+                .find(|&&d| d.var() == lit.var())
+                .map_or(false, |&d| d == lit.inverted())
         })
     }
 
@@ -180,6 +181,8 @@ mod tests {
 
     use std::cmp::Ordering;
 
+    use crate::pool::DecisionPath;
+
     use super::*;
 
     #[test]
@@ -226,5 +229,18 @@ mod tests {
                 clause_ints
             );
         }
+    }
+
+    #[test]
+    fn test_is_unsatisfied_by_decisions() {
+        let clause: Clause = Clause(vec![Lit::from(1), Lit::from(-2), Lit::from(3)]);
+
+        assert!(
+            !clause.is_unsatisfied_by_decisions(&DecisionPath::from(vec![1i32, -2, 3, -4, 5,]))
+        );
+
+        assert!(
+            clause.is_unsatisfied_by_decisions(&DecisionPath::from(vec![-1i32, 2, -3, -4, 5,]))
+        );
     }
 }
