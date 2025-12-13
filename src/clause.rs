@@ -35,6 +35,16 @@ impl Clause {
         })
     }
 
+    pub fn is_unsatisfied_by_decisions(&self, decisions: &[Lit]) -> bool {
+        self.0.iter().all(|&lit| {
+            let var_state = decisions.iter().find(|&&d| d.var() == lit.var());
+            match var_state {
+                Some(d) => d.is_neg(),
+                None => false, // Variable not assigned in decisions
+            }
+        })
+    }
+
     /// Checks if the clause is satisfied by the given partial assignment.
     pub fn is_satisfied_by_partial(&self, part_assignment: &PartialAssignment) -> bool {
         self.0.iter().any(|&lit| {

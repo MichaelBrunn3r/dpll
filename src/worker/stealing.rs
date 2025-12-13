@@ -10,6 +10,7 @@ use crate::{
     clause::Lit,
     dpll::DPLLSolver,
     if_metrics,
+    pool::DecisionPath,
     problem::Problem,
     utils::{Backoff, VecExt, find_coprime_to, opt_bool::OptBool},
     worker::{WorkerStrategy, metrics},
@@ -153,7 +154,7 @@ impl WorkerStrategy for StealingWorker {
             .expect("Invariant violated: Pooled Arc has multiple owners")
             .0;
         path.clear();
-        solver.assignment.extract_decisions_into(&mut path);
+        solver.assignment.extract_decisions(&mut path);
 
         // Get the last decision made
         let last_lit = if let Some(last_decision) = path.last_mut() {
@@ -189,13 +190,8 @@ impl WorkerStrategy for StealingWorker {
         let result = loop {
             if let Some(stolen_path) = self.try_steal_from_peers() {
                 self.steal_backoff.reset();
-                let mut init_assignment = vec![OptBool::Unassigned; problem.num_vars];
-                for lit in &stolen_path.0 {
-                    init_assignment[lit.var() as usize] = OptBool::from(lit.is_pos());
-                }
 
-                let solver =
-                    DPLLSolver::with_assignment(&problem, init_assignment, stolen_path.0.len());
+                let solver = DPLLSolver::with_decisions(&problem, &stolen_path);
                 let last_lit = stolen_path.0.last().unwrap();
                 let falsified_lit = last_lit.inverted();
 
@@ -247,16 +243,5 @@ impl WorkerStrategy for StealingWorker {
 
         metrics::record_work_was_stolen(self._id);
         true
-    }
-}
-
-/// A sequence of variable assignment decisions made during search.
-/// Can be stolen by idle workers and helps them reconstruct search states.
-#[derive(Debug)]
-pub struct DecisionPath(pub Vec<Lit>);
-
-impl From<Vec<Lit>> for DecisionPath {
-    fn from(decisions: Vec<Lit>) -> Self {
-        Self(decisions)
     }
 }

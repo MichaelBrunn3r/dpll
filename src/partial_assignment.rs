@@ -2,6 +2,7 @@ use itertools::Itertools;
 
 use crate::{
     clause::{Lit, VariableId},
+    pool::DecisionPath,
     utils::opt_bool::OptBool,
 };
 use std::ops::{Deref, Index};
@@ -26,28 +27,14 @@ pub struct PartialAssignment {
 }
 
 impl PartialAssignment {
-    /// Creates a new Assignment state with the given initial assignment.
-    /// The initial assignment will be treated as level 0 (no decisions made yet).
-    pub fn with_assignment(
-        initial_assignment: Vec<OptBool>,
-        initial_decision_level: usize,
-    ) -> Self {
-        let num_assigned = initial_assignment
-            .iter()
-            .filter(|&state| state.is_some())
-            .count();
+    pub fn with_decisions(num_vars: usize, initial_decisions: &DecisionPath) -> Self {
+        let num_assigned = initial_decisions.0.len();
+        let initial_decision_level = num_assigned;
 
-        debug_assert!(
-            num_assigned == initial_decision_level,
-            "Initial assignment has {} assigned variables, but initial decision level is {}.",
-            num_assigned,
-            initial_decision_level
-        );
-
-        let history = initial_assignment
+        let history = initial_decisions
+            .0
             .iter()
-            .enumerate()
-            .filter_map(|(var, &state)| if state.is_some() { Some(var) } else { None })
+            .map(|lit| lit.var())
             .collect_vec();
 
         debug_assert!(
@@ -58,17 +45,17 @@ impl PartialAssignment {
         );
 
         PartialAssignment {
+            current_state: initial_decisions.to_assignment(num_vars),
+            decision_marks: (0..initial_decision_level).collect_vec(),
             history,
-            decision_marks: Vec::new(),
             num_assigned,
-            current_state: initial_assignment,
             initial_decision_level,
         }
     }
 
     /// Returns the current decision level (depth of the search tree).
     pub fn decision_level(&self) -> usize {
-        self.decision_marks.len() + self.initial_decision_level
+        self.decision_marks.len()
     }
 
     /// Check if a variable is assigned.
@@ -128,7 +115,7 @@ impl PartialAssignment {
     /// Returns `None` if the current level has been fully explored and backtracking should continue to the next higher level.
     pub fn backtrack_once(&mut self) -> BacktrackResult {
         // Check if we can backtrack further.
-        if self.decision_marks.is_empty() {
+        if self.decision_marks.len() <= self.initial_decision_level {
             return BacktrackResult::NoMoreDecisions;
         }
 
@@ -165,28 +152,43 @@ impl PartialAssignment {
         *level_start
     }
 
-    /// Extracts the current sequence of variable assignment decisions into the provided buffer.
-    pub fn extract_decisions_into(&self, buffer: &mut Vec<Lit>) {
-        // first, extract the initial decisions
-        for i in 0..self.initial_decision_level {
-            let var = self.history[i];
-            let val = self.current_state[var].unwrap();
-            buffer.push(Lit::new(var, val)); // repurpose lit to store var + val
-        }
-
-        for &decision_idx in &self.decision_marks {
+    /// Extracts the sequence of variable assignment decisions up to the given decision level into the provided buffer.
+    pub fn extract_decisions_upto(&self, level: usize, buffer: &mut Vec<Lit>) {
+        for &decision_idx in self.decision_marks.iter().take(level) {
             let var = self.history[decision_idx];
+            // Safety: We know var is assigned if it is in history
             let val = self.current_state[var].unwrap();
             buffer.push(Lit::new(var, val));
         }
 
         debug_assert!(
-            buffer.len() == self.decision_level(),
-            "Extracted {}, but we are @{}. Initial level: {}",
+            buffer.len() == level,
+            "Extracted {}, but we wanted up to level {}. Initial level: {}",
             buffer.len(),
-            self.decision_level(),
+            level,
             self.initial_decision_level
         );
+    }
+
+    /// Extracts the current sequence of variable assignment decisions into the provided buffer.
+    pub fn extract_decisions(&self, buffer: &mut Vec<Lit>) {
+        self.extract_decisions_upto(self.decision_level(), buffer);
+    }
+
+    /// Extracts decisions starting from `start_level` until (and including) the next decision assigned to `true`.
+    pub fn extract_decisions_until_next_true(&self, start_level: usize, buffer: &mut Vec<Lit>) {
+        for (level, &decision_idx) in self.decision_marks.iter().enumerate() {
+            let var = self.history[decision_idx];
+            // Safety: Variables in history are always assigned.
+            let val = self.current_state[var].unwrap();
+
+            buffer.push(Lit::new(var, val));
+
+            // Only check the stop condition if we have reached the start_level.
+            if level >= start_level && val {
+                return;
+            }
+        }
     }
 
     /// Returns the value of the last decision made, or None if no decisions have been made.
@@ -260,4 +262,81 @@ pub enum BacktrackResult {
     TryAlternative(Lit),
     NoMoreDecisions,
     Continue,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_with_decisions() {
+        let initial_decisions = DecisionPath(vec![
+            Lit::new(1, false),
+            Lit::new(3, true),
+            Lit::new(2, true),
+            Lit::new(0, true),
+            Lit::new(4, false),
+        ]);
+        let assignment = PartialAssignment::with_decisions(8, &initial_decisions);
+
+        assert_eq!(assignment.decision_level(), 5);
+        assert_eq!(assignment.last_decision(), OptBool::from(false));
+
+        assert_eq!(assignment[0], OptBool::from(true));
+        assert_eq!(assignment[1], OptBool::from(false));
+        assert_eq!(assignment[2], OptBool::from(true));
+        assert_eq!(assignment[3], OptBool::from(true));
+        assert_eq!(assignment[4], OptBool::from(false));
+        assert_eq!(assignment[5], OptBool::Unassigned);
+        assert_eq!(assignment[6], OptBool::Unassigned);
+        assert_eq!(assignment[7], OptBool::Unassigned);
+    }
+
+    #[test]
+    fn test_extract_decisions() {
+        let initial_decisions = DecisionPath(vec![
+            Lit::new(1, false),
+            Lit::new(3, true),
+            Lit::new(2, true),
+            Lit::new(0, true),
+            Lit::new(4, false),
+        ]);
+        let assignment = PartialAssignment::with_decisions(8, &initial_decisions);
+
+        let mut buffer = Vec::new();
+        assignment.extract_decisions(&mut buffer);
+
+        assert_eq!(buffer.len(), 5);
+        assert_eq!(buffer[0], Lit::new(1, false));
+        assert_eq!(buffer[1], Lit::new(3, true));
+        assert_eq!(buffer[2], Lit::new(2, true));
+        assert_eq!(buffer[3], Lit::new(0, true));
+        assert_eq!(buffer[4], Lit::new(4, false));
+    }
+
+    #[test]
+    fn test_extract_decisions_until_next_true() {
+        let initial_decisions = DecisionPath(vec![
+            Lit::new(1, false),
+            Lit::new(3, true),
+            Lit::new(2, false), // 3rd decision
+            Lit::new(0, false),
+            Lit::new(4, false),
+            Lit::new(6, true), // next true decision
+            Lit::new(5, false),
+        ]);
+
+        let assignment = PartialAssignment::with_decisions(10, &initial_decisions);
+
+        let mut buffer = Vec::new();
+        assignment.extract_decisions_until_next_true(2, &mut buffer);
+
+        assert_eq!(buffer.len(), 6);
+        assert_eq!(buffer[0], Lit::new(1, false));
+        assert_eq!(buffer[1], Lit::new(3, true));
+        assert_eq!(buffer[2], Lit::new(2, false));
+        assert_eq!(buffer[3], Lit::new(0, false));
+        assert_eq!(buffer[4], Lit::new(4, false));
+        assert_eq!(buffer[5], Lit::new(6, true));
+    }
 }

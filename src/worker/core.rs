@@ -58,17 +58,7 @@ impl<B: WorkerStrategy> WorkerCore<B> {
     pub fn solve_subproblem(&mut self, subproblem: SubProblem) {
         let ctx = &self.local_problem_ctx.clone();
 
-        let initial_decision_level = subproblem
-            .init_assignment
-            .iter()
-            .filter(|&val| val.is_some())
-            .count();
-        let mut solver = DPLLSolver::with_assignment(
-            &ctx.problem,
-            subproblem.init_assignment,
-            initial_decision_level,
-        );
-
+        let mut solver = DPLLSolver::with_decisions(&ctx.problem, &subproblem.initial_decision);
         let mut falsified_lit = solver.make_branching_decision();
         self.strat.after_decision(&solver);
 
@@ -95,7 +85,7 @@ impl<B: WorkerStrategy> WorkerCore<B> {
                 SolverAction::Backtrack => {
                     if_metrics!(
                         let mut path = Vec::new();
-                        solver.assignment.extract_decisions_into(&mut path);
+                        solver.assignment.extract_decisions(&mut path);
                         metrics::record_path(&path);
                         metrics::record_conflict(self._id);
                     );

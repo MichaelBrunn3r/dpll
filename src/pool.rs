@@ -1,4 +1,5 @@
 use crate::{
+    clause::Lit,
     dpll::DPLLSolver,
     generator, if_metrics,
     problem::Problem,
@@ -153,8 +154,7 @@ impl WorkerPool {
             Some(tx) => tx,
             None => {
                 // Single-threaded mode
-                let assignment_buffer = vec![OptBool::Unassigned; problem.num_vars];
-                return DPLLSolver::with_assignment(&problem, assignment_buffer, 0).solve();
+                return DPLLSolver::with_decisions(&problem, &DecisionPath(Vec::new())).solve();
             }
         };
 
@@ -177,14 +177,14 @@ impl WorkerPool {
         let depth = Self::calculate_depth(self.num_workers, problem.num_vars);
         let split_vars = Arc::new(Self::select_split_vars(&problem, depth));
 
-        for init_assignment in Self::generate_combinations(&problem, &split_vars) {
+        for initial_decisions in Self::generate_combinations(&problem, &split_vars) {
             // Check if a solution has been found while generating jobs
             if solution_found.load(atomic::Ordering::Acquire) {
                 break;
             }
 
             if job_sender
-                .send(SubProblem::new(current_pid, init_assignment))
+                .send(SubProblem::new(current_pid, initial_decisions))
                 .is_err()
             {
                 return None;
@@ -261,34 +261,33 @@ impl WorkerPool {
     fn generate_combinations<'p>(
         problem: &'p Problem,
         split_vars: &'p Vec<usize>,
-    ) -> impl Iterator<Item = Vec<OptBool>> + 'p {
+    ) -> impl Iterator<Item = DecisionPath> + 'p {
         let clauses_containing_split_vars = split_vars
             .iter()
             .flat_map(|&var| problem.clauses_containing_var(var))
             .unique_by(|c| *c as *const _)
             .collect::<Vec<_>>();
 
-        let num_vars = problem.num_vars;
         let combinations = 1usize << split_vars.len();
 
         generator!(move || {
             for combination in 0..combinations {
-                let mut assignment = vec![OptBool::Unassigned; num_vars];
+                let mut decisions = Vec::with_capacity(split_vars.len());
 
                 for (bit_idx, &var) in split_vars.iter().enumerate() {
                     let val = (combination & (1 << bit_idx)) != 0;
-                    assignment[var] = OptBool::from(val);
+                    decisions.push(Lit::new(var, val));
                 }
 
                 // Check if any clause containing split vars is unsatisfied
                 if clauses_containing_split_vars
                     .iter()
-                    .any(|clause| clause.is_unsatisfied_by_partial(&assignment))
+                    .any(|clause| clause.is_unsatisfied_by_decisions(&decisions))
                 {
                     continue; // Skip this assignment as it leads to unsatisfied clauses
                 }
 
-                yield assignment
+                yield DecisionPath(decisions);
             }
         })
     }
@@ -321,14 +320,35 @@ pub struct SubProblem {
     /// The ID of the associated problem.
     pub pid: usize,
     /// The initial assignment for the sub-problem.
-    pub init_assignment: Vec<OptBool>,
+    pub initial_decision: DecisionPath,
 }
 
 impl SubProblem {
-    pub fn new(pid: usize, init_assignment: Vec<OptBool>) -> Self {
+    pub fn new(pid: usize, initial_decision: DecisionPath) -> Self {
         Self {
             pid,
-            init_assignment,
+            initial_decision,
         }
+    }
+}
+
+/// A sequence of variable assignment decisions made during search.
+/// Can be stolen by idle workers and helps them reconstruct search states.
+#[derive(Debug)]
+pub struct DecisionPath(pub Vec<Lit>);
+
+impl DecisionPath {
+    pub fn to_assignment(&self, num_vars: usize) -> Vec<OptBool> {
+        let mut assignment = vec![OptBool::Unassigned; num_vars];
+        for lit in &self.0 {
+            assignment[lit.var() as usize] = OptBool::from(lit.is_pos());
+        }
+        assignment
+    }
+}
+
+impl From<Vec<Lit>> for DecisionPath {
+    fn from(decisions: Vec<Lit>) -> Self {
+        Self(decisions)
     }
 }

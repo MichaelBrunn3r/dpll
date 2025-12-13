@@ -1,8 +1,9 @@
 use crate::{
     clause::{ClauseState, Lit},
     partial_assignment::PartialAssignment,
+    pool::DecisionPath,
     problem::Problem,
-    utils::{NonExhaustingCursor, opt_bool::OptBool},
+    utils::NonExhaustingCursor,
 };
 
 pub struct DPLLSolver<'a> {
@@ -15,22 +16,10 @@ pub struct DPLLSolver<'a> {
 }
 
 impl<'a> DPLLSolver<'a> {
-    pub fn with_assignment(
-        problem: &'a Problem,
-        initial_assignment: Vec<OptBool>,
-        initial_decision_level: usize,
-    ) -> Self {
-        debug_assert!(
-            initial_assignment.len() == problem.num_vars,
-            "Initial assignment length must match number of variables."
-        );
-
+    pub fn with_decisions(problem: &'a Problem, initial_decisions: &DecisionPath) -> Self {
         DPLLSolver {
             problem,
-            assignment: PartialAssignment::with_assignment(
-                initial_assignment,
-                initial_decision_level,
-            ),
+            assignment: PartialAssignment::with_decisions(problem.num_vars, initial_decisions),
             falsified_lits_buffer: Vec::new(),
             decision_candidate_cursor: NonExhaustingCursor::new(),
         }
