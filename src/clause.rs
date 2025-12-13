@@ -107,7 +107,7 @@ pub type VariableId = usize;
 /// A propositional logic literal, i.e. a variable or its negation.
 ///
 /// E.g. `x` or `¬x`, where `x` is a variable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Lit(pub u32);
 

@@ -21,6 +21,7 @@ class MetricsData(TypedDict):
     rate_early:   npt.NDArray[np.int64]
     rate_self:    npt.NDArray[np.int64]
     avg_q_max:    npt.NDArray[np.float64]
+    final_checksum: int
 
 # Match the Rust struct layout exactly
 worker_dtype = np.dtype([
@@ -45,6 +46,7 @@ def load_and_process_data(filename: str, max_workers: int) -> Optional[MetricsDa
         ('timestamp_ms', 'u8'),
         ('global_allocated_paths', 'u8'),
         ('global_conflicts', 'u8'),
+        ('global_path_checksum', 'u8'),
         ('workers', worker_dtype, (max_workers,))
     ])
 
@@ -98,6 +100,7 @@ def load_and_process_data(filename: str, max_workers: int) -> Optional[MetricsDa
 
     total_conflicts_accum = valid_rows['global_conflicts']
     rate_conflicts = np.diff(total_conflicts_accum, prepend=0)
+    final_checksum = valid_rows['global_path_checksum'][-1]
 
     return {
         "timestamps": timestamps,
@@ -109,7 +112,8 @@ def load_and_process_data(filename: str, max_workers: int) -> Optional[MetricsDa
         "rate_fail": rate_fail,
         "rate_early": rate_early,
         "rate_self": rate_self,
-        "avg_q_max": avg_q_max
+        "avg_q_max": avg_q_max,
+        "final_checksum": final_checksum
     }
 
 def plot_data(metrics: MetricsData, max_workers: int) -> None:
@@ -199,8 +203,10 @@ def main():
         return
 
     print("-" * 40)
-    print(f"Total Conflicts Found: {metrics['final_conflicts']:,}")
+    print(f"Total Conflicts: {metrics['final_conflicts']:,}")
+    print(f"Path Checksum:   0x{metrics['final_checksum']:016X}")
     print("-" * 40)
+
     plot_data(metrics, args.workers)
 
 if __name__ == "__main__":

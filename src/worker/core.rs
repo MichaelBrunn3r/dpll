@@ -3,6 +3,7 @@ use std::sync::{
     atomic::{self, AtomicUsize},
 };
 
+use crate::if_metrics;
 use crate::{
     clause::Lit,
     dpll::{DPLLSolver, SolverAction},
@@ -92,7 +93,12 @@ impl<B: WorkerStrategy> WorkerCore<B> {
                     self.strat.after_decision(&solver);
                 }
                 SolverAction::Backtrack => {
-                    metrics::record_conflict(self._id);
+                    if_metrics!(
+                        let mut path = Vec::new();
+                        solver.assignment.extract_decisions_into(&mut path);
+                        metrics::record_path(&path);
+                        metrics::record_conflict(self._id);
+                    );
 
                     if let Some(new_falsified_lit) = self.backtrack(&mut solver) {
                         falsified_lit = new_falsified_lit;

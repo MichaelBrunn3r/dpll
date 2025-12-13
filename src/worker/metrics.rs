@@ -1,5 +1,7 @@
 #[cfg(feature = "metrics")]
 use crossbeam_utils::CachePadded;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
@@ -11,11 +13,16 @@ use std::{
     time::Instant,
 };
 
+use crate::clause::Lit;
+
 // -------------
 // --- State ---
 // -------------
 
 pub const MAX_WORKERS: usize = 16;
+
+#[cfg(feature = "metrics")]
+pub static PATH_XOR_CHECKSUM: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(feature = "metrics")]
 static PER_WORKER_METRICS: [CachePadded<WorkerMetrics>; MAX_WORKERS] =
@@ -28,6 +35,14 @@ static INTERACTION_STATS: [CachePadded<InteractionMetrics>; MAX_WORKERS] =
 // ----------------------
 // --- Record metrics ---
 // ----------------------
+
+pub fn record_path(path: &[Lit]) {
+    #[cfg(feature = "metrics")]
+    {
+        let path_hash = calculate_path_hash(path);
+        PATH_XOR_CHECKSUM.fetch_xor(path_hash, Ordering::Relaxed);
+    }
+}
 
 /// Record that a worker successfully stole a path from another worker
 #[inline(always)]
@@ -216,6 +231,7 @@ pub struct LogRow {
     pub timestamp_ms: u64,
     pub global_allocated_paths: u64,
     pub global_conflicts: u64,
+    pub global_path_checksum: u64,
     pub workers: [WorkerLogData; MAX_WORKERS],
 }
 
@@ -320,6 +336,7 @@ impl MetricsLogger {
             timestamp_ms: elapsed,
             global_allocated_paths: total_allocated,
             global_conflicts: total_conflicts,
+            global_path_checksum: PATH_XOR_CHECKSUM.load(Ordering::Relaxed),
             workers: worker_data,
         };
 
@@ -424,4 +441,10 @@ impl InteractionMetrics {
             stolen_from: AtomicU64::new(0),
         }
     }
+}
+
+fn calculate_path_hash(path: &[Lit]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    hasher.finish()
 }
