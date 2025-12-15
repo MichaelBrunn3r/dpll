@@ -13,7 +13,7 @@ pub fn main() -> Result<(), String> {
     let num_workers = available_parallelism()
         .unwrap_or(NonZero::new(1).unwrap())
         .get();
-    let pool = WorkerPool::new(num_workers, true);
+    let pool = WorkerPool::new(num_workers, false);
     match pool.submit(Arc::new(problem)) {
         None => {
             println!("s UNSATISFIABLE");

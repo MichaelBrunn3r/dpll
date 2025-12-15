@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+pub mod indexed_heap;
 pub mod opt_bool;
 
 pub fn human_duration(duration: Duration) -> String {
