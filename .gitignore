@@ -14,3 +14,4 @@ flamegraph.svg
 perf.*
 .git.zip
 heaptrack*
+*.bin

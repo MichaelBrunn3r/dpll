@@ -91,9 +91,12 @@ impl PartialAssignment {
     }
 
     /// Backtracks to the highest decision level that hasn't been fully explored.
-    pub fn backtrack(&mut self) -> Option<Lit> {
+    pub fn backtrack<F>(&mut self, mut on_unassign_var: F) -> Option<Lit>
+    where
+        F: FnMut(VariableId),
+    {
         loop {
-            match self.backtrack_once() {
+            match self.backtrack_once(&mut on_unassign_var) {
                 BacktrackResult::TryAlternative(falsified_lit) => return Some(falsified_lit),
                 BacktrackResult::NoMoreDecisions => {
                     return None;
@@ -113,14 +116,17 @@ impl PartialAssignment {
     ///   - Tried 'false': All options explored. Returns None to indicate the need to backtrack further.
     ///
     /// Returns `None` if the current level has been fully explored and backtracking should continue to the next higher level.
-    pub fn backtrack_once(&mut self) -> BacktrackResult {
+    pub fn backtrack_once<F>(&mut self, mut on_unassign_var: F) -> BacktrackResult
+    where
+        F: FnMut(VariableId),
+    {
         // Check if we can backtrack further.
         if self.decision_marks.len() <= self.initial_decision_level {
             return BacktrackResult::NoMoreDecisions;
         }
 
         // Undo all propagations that happened *after* the decision for this level.
-        let decision_idx = self.undo_current_unit_propagations();
+        let decision_idx = self.undo_current_unit_propagations(&mut on_unassign_var);
         let decision_var = self.history[decision_idx];
 
         if self.current_state[decision_var].is_true() {
@@ -132,6 +138,10 @@ impl PartialAssignment {
             // => All options at this level are exhausted. Try the next higher level.
             self.current_state[decision_var] = OptBool::Unassigned;
             self.num_assigned -= 1;
+
+            // Notify that the variable is now unassigned.
+            on_unassign_var(decision_var);
+
             self.history.pop();
             self.decision_marks.pop();
             return BacktrackResult::Continue;
@@ -140,7 +150,10 @@ impl PartialAssignment {
 
     /// Undoes unit propagations for the current level, leaving the decision variable intact.
     /// Returns the index of the decision variable in the history.
-    fn undo_current_unit_propagations(&mut self) -> usize {
+    fn undo_current_unit_propagations<F>(&mut self, mut on_unassign_var: F) -> usize
+    where
+        F: FnMut(VariableId),
+    {
         let level_start = self.decision_marks.last().unwrap();
 
         // Pop everything after the decision variable
@@ -148,6 +161,9 @@ impl PartialAssignment {
             let var = self.history.pop().unwrap();
             self.current_state[var] = OptBool::Unassigned;
             self.num_assigned -= 1;
+
+            // Notify that the variable is now unassigned.
+            on_unassign_var(var);
         }
         *level_start
     }

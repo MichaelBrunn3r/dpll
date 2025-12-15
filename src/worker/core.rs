@@ -131,7 +131,7 @@ impl<B: WorkerStrategy> WorkerCore<B> {
     pub fn backtrack(&mut self, solver: &mut DPLLSolver) -> Option<Lit> {
         while !self.strat.should_stop_backtracking_early(solver) {
             // Try to backtrack one level
-            match solver.assignment.backtrack_once() {
+            match solver.backtrack_one_level() {
                 BacktrackResult::TryAlternative(new_falsified_lit) => {
                     return Some(new_falsified_lit); // Success, try this alternative path
                 }

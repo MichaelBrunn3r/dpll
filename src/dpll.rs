@@ -1,9 +1,9 @@
 use crate::{
     clause::{ClauseState, Lit},
-    partial_assignment::PartialAssignment,
+    partial_assignment::{BacktrackResult, PartialAssignment},
     pool::DecisionPath,
     problem::Problem,
-    utils::NonExhaustingCursor,
+    vsids::VSIDS,
 };
 
 pub struct DPLLSolver<'a> {
@@ -11,8 +11,7 @@ pub struct DPLLSolver<'a> {
     pub assignment: PartialAssignment,
     /// Reusable buffer for literals that have just been falsified during unit propagation.
     falsified_lits_buffer: Vec<Lit>,
-    /// Cursor to keep track of which variable to consider next for branching decisions.
-    decision_candidate_cursor: NonExhaustingCursor,
+    vsids: VSIDS,
 }
 
 impl<'a> DPLLSolver<'a> {
@@ -21,7 +20,7 @@ impl<'a> DPLLSolver<'a> {
             problem,
             assignment: PartialAssignment::with_decisions(problem.num_vars, initial_decisions),
             falsified_lits_buffer: Vec::new(),
-            decision_candidate_cursor: NonExhaustingCursor::new(),
+            vsids: VSIDS::with_scores(&problem.var_scores),
         }
     }
 
@@ -36,7 +35,10 @@ impl<'a> DPLLSolver<'a> {
                     falsified_lit = next_falsified_lit;
                 }
                 SolverAction::Backtrack => {
-                    match self.assignment.backtrack() {
+                    match self
+                        .assignment
+                        .backtrack(|var| self.vsids.on_unassign_var(var))
+                    {
                         None => {
                             // Cannot backtrack further => UNSAT
                             return None;
@@ -56,7 +58,6 @@ impl<'a> DPLLSolver<'a> {
                 return SolverAction::SAT;
             }
             PropagationResult::UNSAT => {
-                self.decision_candidate_cursor.reset();
                 return SolverAction::Backtrack;
             }
             PropagationResult::Undecided => {
@@ -80,25 +81,19 @@ impl<'a> DPLLSolver<'a> {
                 match clause.eval_with_partial(&self.assignment) {
                     ClauseState::Satisfied => continue 'clauses, // 1 clause satisfied => check next
                     ClauseState::Unsatisfied => {
+                        self.vsids.bump_lit_activities(&clause.0);
+                        self.vsids.decay();
                         return PropagationResult::UNSAT; // Conflict => backtrack
                     }
                     ClauseState::Undecided(_) => continue 'clauses, // continue checking for conflicts and unit clauses
                     ClauseState::Unit(unit_literal) => {
                         let var = unit_literal.var();
-                        if self.assignment[var].is_some() {
-                            // Check if the variable is already assigned the opposite value
-                            if !self.assignment[var].is_bool(unit_literal.is_pos()) {
-                                return PropagationResult::UNSAT; // Conflict => backtrack
-                            }
-                            // Variable already assigned correctly, no action needed
-                        } else {
-                            // Variable is unassigned. Assign the variable such that the unit literal is true.
-                            // => The unit clause will be satisfied.
-                            self.assignment.propagate(var, unit_literal.is_pos());
-
-                            // Unit literal is now true => its negation is false
-                            self.falsified_lits_buffer.push(unit_literal.inverted());
-                        }
+                        debug_assert!(
+                            self.assignment[var].is_none(),
+                            "Unit literal should be unassigned"
+                        );
+                        self.assignment.propagate(var, unit_literal.is_pos());
+                        self.falsified_lits_buffer.push(unit_literal.inverted());
                     }
                 }
             }
@@ -114,13 +109,18 @@ impl<'a> DPLLSolver<'a> {
         };
     }
 
+    pub fn backtrack_one_level(&mut self) -> BacktrackResult {
+        self.assignment.backtrack_once(|var| {
+            self.vsids.on_unassign_var(var);
+        })
+    }
+
     /// Makes a branching decision by selecting an unassigned variable and assigning it to true.
     pub fn make_branching_decision(&mut self) -> Lit {
-        let decision_var = *self
-            .decision_candidate_cursor
-            .next_match(&self.problem.vars_by_score, |&var| {
-                self.assignment[var].is_none()
-            });
+        let decision_var = self
+            .vsids
+            .pop_most_active_unassigned_var(&self.assignment)
+            .expect("Called make_branching_decision but all variables are assigned");
 
         self.assignment.decide(decision_var);
         // Return the negated literal of the assigned decision variable

@@ -44,7 +44,7 @@ impl StealingWorker {
         local_queue: crossbeam_deque::Worker<Arc<DecisionPath>>,
         peer_queues: Vec<(crossbeam_deque::Stealer<Arc<DecisionPath>>, usize)>,
     ) -> Self {
-        let queue_limit = 1;
+        let queue_limit = 10;
         let steal_stride = find_coprime_to(id, peer_queues.len());
         let last_victim_idx = id % peer_queues.len();
 

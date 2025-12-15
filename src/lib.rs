@@ -10,4 +10,5 @@ pub mod partial_assignment;
 pub mod pool;
 pub mod problem;
 pub mod utils;
+pub mod vsids;
 pub mod worker;
