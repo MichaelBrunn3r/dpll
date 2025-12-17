@@ -7,9 +7,9 @@ use std::{
 };
 
 use crate::{
-    clause::Lit,
     dpll::DPLLSolver,
     if_metrics,
+    lit::Lit,
     pool::threaded::DecisionPath,
     problem::Problem,
     utils::{Backoff, VecExt, find_coprime_to, opt_bool::OptBool},

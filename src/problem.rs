@@ -1,4 +1,5 @@
-use crate::clause::{Clause, Lit, VariableId};
+use crate::clause::Clause;
+use crate::lit::{Lit, VariableId};
 
 #[derive(Debug, Clone)]
 pub struct Problem {

@@ -1,7 +1,7 @@
 use itertools::Itertools;
 
 use crate::{
-    clause::{Lit, VariableId},
+    lit::{Lit, VariableId},
     pool::threaded::DecisionPath,
     utils::opt_bool::OptBool,
 };

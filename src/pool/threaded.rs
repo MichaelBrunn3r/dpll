@@ -1,7 +1,7 @@
 use crate::{
-    clause::Lit,
     dpll::DPLLSolver,
     generator, if_metrics,
+    lit::Lit,
     pool::WorkerPoolStrategy,
     problem::Problem,
     utils::{Backoff, opt_bool::OptBool},

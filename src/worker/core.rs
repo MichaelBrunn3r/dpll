@@ -4,8 +4,8 @@ use std::sync::{
 };
 
 use crate::{
-    clause::Lit,
     dpll::{DPLLSolver, SolverAction},
+    lit::Lit,
     partial_assignment::BacktrackResult,
     pool::threaded::ProblemContext,
     worker::{WorkerStrategy, metrics},

@@ -5,6 +5,7 @@
 pub mod clause;
 pub mod constants;
 pub mod dpll;
+pub mod lit;
 pub mod parser;
 pub mod partial_assignment;
 pub mod pool;

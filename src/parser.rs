@@ -1,6 +1,7 @@
 // Remove Clause from imports, as it's no longer a public struct we construct manually
 use crate::{
-    clause::{Clause, Lit},
+    clause::Clause,
+    lit::Lit,
     problem::{Problem, ProblemBuilder},
 };
 

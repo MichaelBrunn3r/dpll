@@ -1,11 +1,9 @@
-use log::error;
-
 use crate::{
-    clause::{Lit, VariableId},
+    lit::{Lit, VariableId},
     partial_assignment::PartialAssignment,
     utils::indexed_heap::IndexedHeap,
 };
-use std::{cmp::Ordering, collections::BinaryHeap};
+use std::cmp::Ordering;
 
 /// Variable State Independent Decaying Sum
 pub struct VSIDS {

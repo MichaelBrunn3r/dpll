@@ -1,4 +1,4 @@
-use crate::{clause::Lit, dpll::DPLLSolver, problem::Problem};
+use crate::{dpll::DPLLSolver, lit::Lit, problem::Problem};
 use std::sync::atomic::{self};
 
 pub mod core;

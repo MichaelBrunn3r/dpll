@@ -1,3 +1,4 @@
+use crate::lit::Lit;
 #[cfg(feature = "metrics")]
 use crossbeam_utils::CachePadded;
 use std::collections::hash_map::DefaultHasher;
@@ -12,8 +13,6 @@ use std::{
     sync::atomic::Ordering,
     time::Instant,
 };
-
-use crate::clause::Lit;
 
 // -------------
 // --- State ---

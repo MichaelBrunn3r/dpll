@@ -1,5 +1,6 @@
 use crate::{
-    clause::{ClauseState, Lit},
+    clause::ClauseState,
+    lit::Lit,
     partial_assignment::{BacktrackResult, PartialAssignment},
     pool::threaded::DecisionPath,
     problem::Problem,
