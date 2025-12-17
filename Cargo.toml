@@ -19,6 +19,7 @@ indicatif-log-bridge = "0.2.3"
 itertools = "0.14.0"
 log = "0.4.28"
 memmap2 = "0.9.9"
+nonzero_ext = "0.3.0"
 num-format = "0.4.4"
 
 [dev-dependencies]

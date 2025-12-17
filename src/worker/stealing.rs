@@ -10,7 +10,7 @@ use crate::{
     clause::Lit,
     dpll::DPLLSolver,
     if_metrics,
-    pool::DecisionPath,
+    pool::threaded::DecisionPath,
     problem::Problem,
     utils::{Backoff, VecExt, find_coprime_to, opt_bool::OptBool},
     worker::{WorkerStrategy, metrics},

@@ -3,13 +3,16 @@ use std::sync::{
     atomic::{self, AtomicUsize},
 };
 
-use crate::if_metrics;
 use crate::{
     clause::Lit,
     dpll::{DPLLSolver, SolverAction},
     partial_assignment::BacktrackResult,
-    pool::{ProblemContext, SharedContext, SubProblem},
+    pool::threaded::ProblemContext,
     worker::{WorkerStrategy, metrics},
+};
+use crate::{
+    if_metrics,
+    pool::threaded::{SharedContext, SubProblem},
 };
 
 pub struct WorkerCore<S: WorkerStrategy> {

@@ -2,40 +2,35 @@ use crate::{
     clause::Lit,
     dpll::DPLLSolver,
     generator, if_metrics,
+    pool::WorkerPoolStrategy,
     problem::Problem,
     utils::{Backoff, opt_bool::OptBool},
     worker::{core::WorkerCore, metrics::MetricsLogger, stealing::StealingWorker},
 };
 use itertools::Itertools;
-#[cfg(feature = "metrics")]
 use log::{error, info};
 use std::{
+    num::{NonZero, NonZeroUsize},
     sync::{
         Arc, RwLock,
         atomic::{self, AtomicBool, AtomicUsize},
         mpsc,
     },
-    thread::{self, available_parallelism},
+    thread::{self},
     time::Duration,
     vec,
 };
 
-pub struct WorkerPool {
-    job_sender: Option<crossbeam_channel::Sender<SubProblem>>,
+pub struct ThreadedWorkerPool {
+    job_sender: crossbeam_channel::Sender<SubProblem>,
     _workers: Vec<thread::JoinHandle<()>>,
     shared_ctx: Arc<RwLock<SharedContext>>,
-    pub num_workers: usize,
+    pub num_workers: NonZero<usize>,
     pub active_workers: Arc<AtomicUsize>,
 }
 
-impl WorkerPool {
-    pub fn new(num_workers: usize, steal: bool) -> Self {
-        // Limit number of workers to available parallelism
-        let num_workers = num_workers.min(available_parallelism().map(|n| n.get()).unwrap_or(1));
-        if num_workers <= 1 {
-            return Self::new_single_threaded();
-        }
-
+impl ThreadedWorkerPool {
+    pub fn new(num_workers: NonZero<usize>, steal: bool) -> Self {
         // Create communication utilities for subproblem distribution
         let (subproblem_sender, subproblem_receiver) = crossbeam_channel::unbounded::<SubProblem>();
         let shared_ctx = Arc::new(RwLock::new(SharedContext {
@@ -44,7 +39,7 @@ impl WorkerPool {
         }));
 
         // Spawn worker threads
-        let mut workers = Vec::with_capacity(num_workers);
+        let mut workers = Vec::with_capacity(num_workers.get());
         let num_active_workers = Arc::new(AtomicUsize::new(0));
         if steal {
             Self::start_stealing_workers(
@@ -62,25 +57,13 @@ impl WorkerPool {
             );
         }
 
+        info!("Initialized pool with {} worker thread(s).", num_workers);
         Self {
-            job_sender: Some(subproblem_sender),
+            job_sender: subproblem_sender,
             _workers: workers,
             shared_ctx,
             num_workers,
             active_workers: num_active_workers,
-        }
-    }
-
-    pub fn new_single_threaded() -> Self {
-        Self {
-            job_sender: None,
-            _workers: Vec::new(),
-            shared_ctx: Arc::new(RwLock::new(SharedContext {
-                current_pid: 0,
-                problem_ctx: Arc::new(ProblemContext::default()),
-            })),
-            num_workers: 1,
-            active_workers: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -149,58 +132,7 @@ impl WorkerPool {
         }
     }
 
-    pub fn submit(&self, problem: Arc<Problem>) -> Option<Vec<bool>> {
-        let job_sender = match &self.job_sender {
-            Some(tx) => tx,
-            None => {
-                // Single-threaded mode
-                return DPLLSolver::with_decisions(&problem, &DecisionPath(Vec::new())).solve();
-            }
-        };
-
-        // Notify all workers of the new problem
-        let solution_found = Arc::new(AtomicBool::new(false));
-        let (solution_sender, solution_receiver) = mpsc::channel();
-
-        let current_pid = {
-            let mut ctx_lock = self.shared_ctx.write().unwrap();
-            ctx_lock.current_pid += 1;
-
-            ctx_lock.problem_ctx = Arc::new(ProblemContext {
-                problem: Arc::clone(&problem),
-                solution_found_flag: Arc::clone(&solution_found),
-                solution_sender: solution_sender.clone(),
-            });
-            ctx_lock.current_pid
-        };
-
-        let depth = Self::calculate_depth(self.num_workers, problem.num_vars);
-        let split_vars = Arc::new(Self::select_split_vars(&problem, depth));
-
-        for initial_decisions in Self::generate_combinations(&problem, &split_vars) {
-            // Check if a solution has been found while generating jobs
-            if solution_found.load(atomic::Ordering::Acquire) {
-                break;
-            }
-
-            if job_sender
-                .send(SubProblem::new(current_pid, initial_decisions))
-                .is_err()
-            {
-                return None;
-            }
-        }
-
-        drop(solution_sender);
-
-        self.await_result(&job_sender, &solution_receiver)
-    }
-
-    pub fn await_result(
-        &self,
-        job_sender: &crossbeam_channel::Sender<SubProblem>,
-        solution_receiver: &mpsc::Receiver<Vec<bool>>,
-    ) -> Option<Vec<bool>> {
+    pub fn await_result(&self, solution_receiver: &mpsc::Receiver<Vec<bool>>) -> Option<Vec<bool>> {
         let mut backoff = Backoff::new(
             128,
             512,
@@ -219,7 +151,7 @@ impl WorkerPool {
 
             // Check if all workers are idle => UNSAT
             let num_active = self.active_workers.load(atomic::Ordering::Acquire);
-            let pending_subproblems = job_sender.len();
+            let pending_subproblems = self.job_sender.len();
             if num_active == 0 && pending_subproblems == 0 {
                 break None;
             }
@@ -236,11 +168,6 @@ impl WorkerPool {
         }
 
         result
-    }
-
-    /// Calculate depth required to generate at least `num_workers` initial assignments.
-    pub fn calculate_depth(num_workers: usize, num_vars: usize) -> usize {
-        ((num_workers as f64).log2().ceil() as usize).min(num_vars)
     }
 
     fn select_split_vars(problem: &Problem, depth: usize) -> Vec<usize> {
@@ -290,6 +217,66 @@ impl WorkerPool {
                 yield decisions;
             }
         })
+    }
+
+    /// Calculates the optimal number of splits based on the problem size and number of workers.
+    /// Returns None if the problem is too small to benefit from parallelism.
+    pub fn calculate_optimal_splits(problem: &Problem, num_workers: NonZeroUsize) -> Option<usize> {
+        let num_splits = (num_workers.get() as f64).log2().ceil() as usize;
+        if num_splits > problem.num_vars {
+            None
+        } else {
+            Some(num_splits)
+        }
+    }
+}
+
+impl WorkerPoolStrategy for ThreadedWorkerPool {
+    fn submit(&self, problem: Arc<Problem>) -> Option<Vec<bool>> {
+        let num_splits = match Self::calculate_optimal_splits(&problem, self.num_workers) {
+            Some(n) => n,
+            None => {
+                // Problem too small to benefit from parallelism => solve directly
+                return DPLLSolver::with_decisions(&problem, &DecisionPath(Vec::new())).solve();
+            }
+        };
+
+        // Notify all workers of the new problem
+        let solution_found = Arc::new(AtomicBool::new(false));
+        let (solution_sender, solution_receiver) = mpsc::channel();
+
+        let current_pid = {
+            let mut ctx_lock = self.shared_ctx.write().unwrap();
+            ctx_lock.current_pid += 1;
+
+            ctx_lock.problem_ctx = Arc::new(ProblemContext {
+                problem: Arc::clone(&problem),
+                solution_found_flag: Arc::clone(&solution_found),
+                solution_sender: solution_sender.clone(),
+            });
+            ctx_lock.current_pid
+        };
+
+        let split_vars = Arc::new(Self::select_split_vars(&problem, num_splits));
+
+        for initial_decisions in Self::generate_combinations(&problem, &split_vars) {
+            // Check if a solution has been found while generating jobs
+            if solution_found.load(atomic::Ordering::Acquire) {
+                break;
+            }
+
+            if self
+                .job_sender
+                .send(SubProblem::new(current_pid, initial_decisions))
+                .is_err()
+            {
+                return None;
+            }
+        }
+
+        drop(solution_sender);
+
+        self.await_result(&solution_receiver)
     }
 }
 

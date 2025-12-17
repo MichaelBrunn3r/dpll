@@ -1,4 +1,6 @@
-use crate::{partial_assignment::PartialAssignment, pool::DecisionPath, utils::opt_bool::OptBool};
+use crate::{
+    partial_assignment::PartialAssignment, pool::threaded::DecisionPath, utils::opt_bool::OptBool,
+};
 use std::ops::{Deref, DerefMut};
 
 /// A view of a clauses literals.
@@ -178,10 +180,7 @@ impl From<i32> for Lit {
 
 #[cfg(test)]
 mod tests {
-
     use std::cmp::Ordering;
-
-    use crate::pool::DecisionPath;
 
     use super::*;
 

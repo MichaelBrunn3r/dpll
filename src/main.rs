@@ -2,7 +2,7 @@ pub mod cli;
 
 use crate::cli::{generate::generate, solve::solve};
 use clap::{Parser, Subcommand};
-use std::{error::Error, path::PathBuf};
+use std::{error::Error, num::NonZeroUsize, path::PathBuf};
 
 #[derive(Parser)]
 struct Args {
@@ -24,7 +24,7 @@ pub enum Command {
         validate: bool,
         /// Number of worker threads to use (number or 'auto')
         #[arg(short = 'w', long = "worker-threads", value_name = "N", default_value = "1", value_parser = cli::parse_num_worker_threads)]
-        num_worker_threads: usize,
+        num_worker_threads: NonZeroUsize,
         /// Disable the progress bar
         #[arg(long = "no-bar")]
         no_progress_bar: bool,

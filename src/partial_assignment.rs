@@ -2,7 +2,7 @@ use itertools::Itertools;
 
 use crate::{
     clause::{Lit, VariableId},
-    pool::DecisionPath,
+    pool::threaded::DecisionPath,
     utils::opt_bool::OptBool,
 };
 use std::ops::{Deref, Index};

@@ -1,7 +1,7 @@
 use crate::{
     clause::{ClauseState, Lit},
     partial_assignment::{BacktrackResult, PartialAssignment},
-    pool::DecisionPath,
+    pool::threaded::DecisionPath,
     problem::Problem,
     vsids::VSIDS,
 };

@@ -7,8 +7,10 @@ use env_logger::Env;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
 use log::info;
+use nonzero_ext::nonzero;
 use std::fs;
 use std::io::{self, Write};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -168,15 +170,14 @@ impl Stats {
 
 /// Parses the number of worker threads from a string.
 /// Accepts either "auto" or a positive integer.
-pub fn parse_num_worker_threads(s: &str) -> Result<usize, String> {
+pub fn parse_num_worker_threads(s: &str) -> Result<NonZeroUsize, String> {
     if s == "auto" {
-        let n = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1);
-        Ok(n)
+        Ok(std::thread::available_parallelism().unwrap_or(nonzero!(1usize)))
     } else {
         s.parse::<usize>()
             .map_err(|_| format!("{}", s))
-            .map(|n| n.max(1))
+            .and_then(|n| {
+                NonZeroUsize::new(n).ok_or_else(|| format!("Number of workers must be positive"))
+            })
     }
 }

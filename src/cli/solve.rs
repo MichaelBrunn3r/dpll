@@ -2,11 +2,12 @@ use crate::cli::{self, Stats};
 use dpll::{
     measure_time, parser::parse_dimacs_cnf, pool::WorkerPool, record_time, utils::human_duration,
 };
-use log::{error, info, warn};
+use log::{error, info};
 use memmap2::Mmap;
 use std::{
     error::Error,
     fs::File,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
@@ -16,7 +17,7 @@ pub fn solve(
     path: PathBuf,
     limit: Option<usize>,
     validate: bool,
-    num_worker_threads: usize,
+    num_worker_threads: NonZeroUsize,
     no_progress_bar: bool,
     steal: bool,
 ) -> Result<(), Box<dyn Error>> {
@@ -24,10 +25,6 @@ pub fn solve(
 
     let start = Instant::now();
     let pool = WorkerPool::new(num_worker_threads, steal);
-    info!(
-        "Initialized pool with {} worker thread(s).",
-        pool.num_workers
-    );
 
     let mut stats = Stats::new();
     let mut queue = cli::get_problem_input_queue(&path, limit)?;
