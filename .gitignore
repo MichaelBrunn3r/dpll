@@ -15,3 +15,4 @@ perf.*
 .git.zip
 heaptrack*
 *.bin
+DPLL-Arena

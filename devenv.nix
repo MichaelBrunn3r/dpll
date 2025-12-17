@@ -23,6 +23,7 @@
       enable = true;
       channel = "nightly";
       mold.enable = true;
+      targets = ["x86_64-unknown-linux-musl"];
     };
     python = {
       enable = true;

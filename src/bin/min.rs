@@ -1,4 +1,9 @@
-use dpll::{parser::parse_dimacs_cnf, pool::WorkerPool};
+use dpll::{
+    dpll::DPLLSolver,
+    parser::parse_dimacs_cnf,
+    pool::{DecisionPath, WorkerPool},
+    problem::Problem,
+};
 use std::{io::Read, num::NonZero, sync::Arc, thread::available_parallelism};
 
 pub fn main() -> Result<(), String> {
@@ -10,11 +15,10 @@ pub fn main() -> Result<(), String> {
     let problem =
         parse_dimacs_cnf(&data).map_err(|e| format!("Failed to parse DIMACS CNF input: {}", e))?;
 
-    let num_workers = available_parallelism()
-        .unwrap_or(NonZero::new(1).unwrap())
-        .get();
-    let pool = WorkerPool::new(num_workers, false);
-    match pool.submit(Arc::new(problem)) {
+    // let solution = solve_single_threaded(problem);
+    let solution = solve_multi_threaded(problem);
+
+    match solution {
         None => {
             println!("s UNSATISFIABLE");
         }
@@ -32,4 +36,16 @@ pub fn main() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+pub fn solve_single_threaded(problem: Problem) -> Option<Vec<bool>> {
+    DPLLSolver::with_decisions(&problem, &DecisionPath(Vec::new())).solve()
+}
+
+pub fn solve_multi_threaded(problem: Problem) -> Option<Vec<bool>> {
+    let num_workers = available_parallelism()
+        .unwrap_or(NonZero::new(1).unwrap())
+        .get();
+    let pool = WorkerPool::new(num_workers, false);
+    pool.submit(Arc::new(problem))
 }
