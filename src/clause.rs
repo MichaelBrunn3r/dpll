@@ -1,5 +1,5 @@
 use crate::{
-    lit::Lit, partial_assignment::PartialAssignment, pool::threaded::DecisionPath,
+    lit::Lit, partial_assignment::PartialAssignment, pool::cube_and_conquer::DecisionPath,
     utils::opt_bool::OptBool,
 };
 use std::ops::{Deref, DerefMut};

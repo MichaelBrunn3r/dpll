@@ -1,8 +1,9 @@
+pub mod cube_and_conquer;
 pub mod threaded;
 
 use crate::{
     dpll::DPLLSolver,
-    pool::threaded::{DecisionPath, ThreadedWorkerPool},
+    pool::{cube_and_conquer::DecisionPath, threaded::ThreadedWorkerPool},
     problem::Problem,
 };
 use nonzero_ext::nonzero;

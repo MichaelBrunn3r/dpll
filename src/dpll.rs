@@ -1,8 +1,8 @@
 use crate::{
-    clause::ClauseState,
+    clause::Clause,
     lit::Lit,
     partial_assignment::{BacktrackResult, PartialAssignment},
-    pool::threaded::DecisionPath,
+    pool::cube_and_conquer::DecisionPath,
     problem::Problem,
     vsids::VSIDS,
 };
@@ -12,7 +12,7 @@ pub struct DPLLSolver<'a> {
     pub assignment: PartialAssignment,
     /// Reusable buffer for literals that have just been falsified during unit propagation.
     falsified_lits_buffer: Vec<Lit>,
-    vsids: VSIDS,
+    pub vsids: VSIDS,
 }
 
 impl<'a> DPLLSolver<'a> {
@@ -28,14 +28,15 @@ impl<'a> DPLLSolver<'a> {
     pub fn solve(&mut self) -> Option<Vec<bool>> {
         let mut falsified_lit = self.make_branching_decision();
         loop {
+            use SolverAction::*;
             match self.step(falsified_lit) {
-                SolverAction::SAT => {
+                SAT => {
                     return Some(self.assignment.to_solution());
                 }
-                SolverAction::Decision(next_falsified_lit) => {
+                Decision(next_falsified_lit) => {
                     falsified_lit = next_falsified_lit;
                 }
-                SolverAction::Backtrack => {
+                Backtrack => {
                     match self
                         .assignment
                         .backtrack(|var| self.vsids.on_unassign_var(var))
@@ -54,14 +55,15 @@ impl<'a> DPLLSolver<'a> {
     }
 
     pub fn step(&mut self, next_falsified_lit: Lit) -> SolverAction {
-        match self.propagate_units(next_falsified_lit) {
-            PropagationResult::SAT => {
+        use UnitPropagationResult::*;
+        match self.propagate_units_from(next_falsified_lit) {
+            SAT => {
                 return SolverAction::SAT;
             }
-            PropagationResult::UNSAT => {
+            UNSAT => {
                 return SolverAction::Backtrack;
             }
-            PropagationResult::Undecided => {
+            Undecided => {
                 // No conflicts & not all clauses satisfied => some clauses are still undecided
                 // Make the next branching decision
                 return SolverAction::Decision(self.make_branching_decision());
@@ -69,45 +71,71 @@ impl<'a> DPLLSolver<'a> {
         }
     }
 
+    /// Performs unit propagation when no decisions have been made yet.
+    pub fn propagate_units_root(&mut self) -> UnitPropagationResult {
+        self.falsified_lits_buffer.clear();
+
+        // Make 1 full pass over all clauses to find an initial set of unit clauses.
+        if self.propagate_clauses(&self.problem.clauses) == UnitPropagationResult::UNSAT {
+            return UnitPropagationResult::UNSAT;
+        }
+
+        self.propagate_falsified_lits()
+    }
+
     /// Performs unit propagation starting from the literal that was just falsified.
-    fn propagate_units(&mut self, falsified_lit: Lit) -> PropagationResult {
+    pub fn propagate_units_from(&mut self, falsified_lit: Lit) -> UnitPropagationResult {
         self.falsified_lits_buffer.clear();
         self.falsified_lits_buffer.push(falsified_lit);
+        self.propagate_falsified_lits()
+    }
 
+    /// Performs unit propagation for all literals in the falsified literals buffer.
+    fn propagate_falsified_lits(&mut self) -> UnitPropagationResult {
         // Propagate until no unit clauses are left.
         // It's sufficient to only check clauses containing the just falsified literals,
         // since only those clauses can become unit clauses or conflicts.
         while let Some(lit) = self.falsified_lits_buffer.pop() {
-            'clauses: for clause in self.problem.clauses_containing_lit(lit) {
-                match clause.eval_with_partial(&self.assignment) {
-                    ClauseState::Satisfied => continue 'clauses, // 1 clause satisfied => check next
-                    ClauseState::Unsatisfied => {
-                        self.vsids.bump_lit_activities(&clause.0);
-                        self.vsids.decay();
-                        return PropagationResult::UNSAT; // Conflict => backtrack
-                    }
-                    ClauseState::Undecided(_) => continue 'clauses, // continue checking for conflicts and unit clauses
-                    ClauseState::Unit(unit_literal) => {
-                        let var = unit_literal.var();
-                        debug_assert!(
-                            self.assignment[var].is_none(),
-                            "Unit literal should be unassigned"
-                        );
-                        self.assignment.propagate(var, unit_literal.is_pos());
-                        self.falsified_lits_buffer.push(unit_literal.inverted());
-                    }
-                }
+            let clauses = self.problem.clauses_containing_lit(lit);
+            if self.propagate_clauses(clauses) == UnitPropagationResult::UNSAT {
+                return UnitPropagationResult::UNSAT;
             }
         }
 
         // No unit clauses left & we encountered no conflicts.
         // If all variables are assigned => all clauses must be satisfied => SAT.
         // Otherwise => Some clauses are still undecided.
-        return if self.assignment.is_complete() {
-            PropagationResult::SAT
+        if self.assignment.is_complete() {
+            UnitPropagationResult::SAT
         } else {
-            PropagationResult::Undecided
-        };
+            UnitPropagationResult::Undecided
+        }
+    }
+
+    /// Propagates the given clauses, adding any newly falsified literals to the falsified literals buffer.
+    fn propagate_clauses<'s, I>(&'s mut self, clauses: I) -> UnitPropagationResult
+    where
+        I: IntoIterator<Item = &'s Clause>,
+    {
+        for clause in clauses {
+            use crate::clause::ClauseState::*;
+            match clause.eval_with_partial(&self.assignment) {
+                Satisfied => continue, // 1 clause satisfied => check next
+                Unsatisfied => {
+                    self.vsids.bump_lit_activities(&clause.0);
+                    self.vsids.decay();
+                    return UnitPropagationResult::UNSAT; // Conflict => backtrack
+                }
+                Undecided(_) => continue, // continue checking for conflicts and unit clauses
+                Unit(unit_literal) => {
+                    let var = unit_literal.var();
+                    self.assignment.propagate(var, unit_literal.is_pos());
+                    self.falsified_lits_buffer.push(unit_literal.inverted());
+                }
+            }
+        }
+
+        UnitPropagationResult::Undecided
     }
 
     pub fn backtrack_one_level(&mut self) -> BacktrackResult {
@@ -129,14 +157,17 @@ impl<'a> DPLLSolver<'a> {
     }
 }
 
-enum PropagationResult {
-    SAT,
-    UNSAT,
-    Undecided,
-}
-
+/// Next action for the DPLL solver to take after a step.
 pub enum SolverAction {
     SAT,
     Backtrack,
     Decision(Lit),
+}
+
+/// Result of a unit propagation step.
+#[derive(Debug, PartialEq, Eq)]
+pub enum UnitPropagationResult {
+    SAT,
+    UNSAT,
+    Undecided,
 }

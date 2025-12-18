@@ -1,5 +1,5 @@
 use crate::{
-    lit::{Lit, VariableId},
+    lit::{Lit, VariableID},
     partial_assignment::PartialAssignment,
     utils::indexed_heap::IndexedHeap,
 };
@@ -45,7 +45,7 @@ impl VSIDS {
     pub fn pop_most_active_unassigned_var(
         &mut self,
         assignment: &PartialAssignment,
-    ) -> Option<VariableId> {
+    ) -> Option<VariableID> {
         let scores = &self.activity_scores;
         let cmp = |a: usize, b: usize| {
             scores[a]
@@ -68,7 +68,7 @@ impl VSIDS {
     }
 
     /// Called when a variable is unassigned (when backtracking), to re-insert it into the heap.
-    pub fn on_unassign_var(&mut self, var: VariableId) {
+    pub fn on_unassign_var(&mut self, var: VariableID) {
         // Re-insert the variable into the heap with its current activity score.
         if !self.heap.contains(var) {
             let scores = &self.activity_scores;
@@ -87,7 +87,7 @@ impl VSIDS {
     }
 
     /// Bumps the activity scores of the given variables (usually those involved in a conflict clause).
-    pub fn bump_var_activities(&mut self, vars: impl IntoIterator<Item = VariableId>) {
+    pub fn bump_var_activities(&mut self, vars: impl IntoIterator<Item = VariableID>) {
         for var in vars {
             self.activity_scores[var] += self.increment;
 

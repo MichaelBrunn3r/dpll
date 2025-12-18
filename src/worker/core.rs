@@ -73,8 +73,9 @@ impl<B: WorkerStrategy> WorkerCore<B> {
                 break;
             }
 
+            use SolverAction::*;
             match solver.step(falsified_lit) {
-                SolverAction::SAT => {
+                SAT => {
                     // Signal other workers to stop working on this problem
                     ctx.solution_found_flag
                         .store(true, atomic::Ordering::Release);
@@ -83,11 +84,11 @@ impl<B: WorkerStrategy> WorkerCore<B> {
                     let _ = ctx.solution_sender.send(solver.assignment.to_solution());
                     break;
                 }
-                SolverAction::Decision(next_falsified_lit) => {
+                Decision(next_falsified_lit) => {
                     falsified_lit = next_falsified_lit;
                     self.strat.after_decision(&solver);
                 }
-                SolverAction::Backtrack => {
+                Backtrack => {
                     if_metrics!(
                         let mut path = Vec::new();
                         solver.assignment.extract_decisions(&mut path);
@@ -134,16 +135,12 @@ impl<B: WorkerStrategy> WorkerCore<B> {
     pub fn backtrack(&mut self, solver: &mut DPLLSolver) -> Option<Lit> {
         while !self.strat.should_stop_backtracking_early(solver) {
             // Try to backtrack one level
+            use BacktrackResult::*;
             match solver.backtrack_one_level() {
-                BacktrackResult::TryAlternative(new_falsified_lit) => {
-                    return Some(new_falsified_lit); // Success, try this alternative path
-                }
-                BacktrackResult::NoMoreDecisions => {
-                    return None;
-                }
-                BacktrackResult::Continue => {
-                    continue;
-                }
+                // Success, try this alternative path
+                TryAlternative(new_falsified_lit) => return Some(new_falsified_lit),
+                NoMoreDecisions => return None,
+                ContinueBacktracking => continue,
             }
         }
 

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{num::NonZeroUsize, time::Duration};
 
 pub mod indexed_heap;
 pub mod opt_bool;
@@ -188,4 +188,23 @@ pub fn find_coprime_to(start_offset: usize, num: usize) -> usize {
         }
     }
     1
+}
+
+#[macro_export]
+macro_rules! dprintln {
+    ($($t:tt)*) => {
+        #[cfg(debug_assertions)]
+        println!($($t)*);
+    };
+}
+
+pub trait NonZeroUsizeExt {
+    fn ilog2_nz_clamped(&self) -> NonZeroUsize;
+}
+
+impl NonZeroUsizeExt for NonZeroUsize {
+    fn ilog2_nz_clamped(&self) -> NonZeroUsize {
+        let log = self.get().ilog2() as usize;
+        NonZeroUsize::new(log.max(1)).unwrap()
+    }
 }

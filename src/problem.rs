@@ -1,5 +1,5 @@
 use crate::clause::Clause;
-use crate::lit::{Lit, VariableId};
+use crate::lit::{Lit, VariableID};
 
 #[derive(Debug, Clone)]
 pub struct Problem {
@@ -12,7 +12,7 @@ pub struct Problem {
     /// Jeroslow-Wang scores for each variable.
     pub var_scores: Vec<f64>,
     /// Variables sorted by their Jeroslow-Wang scores in descending order.
-    pub vars_by_score: Vec<VariableId>,
+    pub vars_by_score: Vec<VariableID>,
 }
 
 impl Problem {

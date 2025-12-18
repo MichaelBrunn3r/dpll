@@ -1,8 +1,8 @@
 use itertools::Itertools;
 
 use crate::{
-    lit::{Lit, VariableId},
-    pool::threaded::DecisionPath,
+    lit::{Lit, VariableID},
+    pool::cube_and_conquer::DecisionPath,
     utils::opt_bool::OptBool,
 };
 use std::ops::{Deref, Index};
@@ -16,7 +16,7 @@ pub struct PartialAssignment {
 
     /// A chronological stack of all variable assignments (decisions & unit propagations).
     /// Used to undo assignments during backtracking.
-    history: Vec<VariableId>,
+    history: Vec<VariableID>,
 
     /// Indices into the history that mark the start of each decision level.
     /// `decision_marks[i]` points to the index in `history` where the decision variable for level `i+1` is stored.
@@ -60,13 +60,13 @@ impl PartialAssignment {
 
     /// Check if a variable is assigned.
     #[inline(always)]
-    pub fn is_assigned(&self, var: VariableId) -> bool {
+    pub fn is_assigned(&self, var: VariableID) -> bool {
         self.current_state[var].is_some()
     }
 
     /// Assign a variable during Unit Propagation.
     /// Assumes the variable is unassigned.
-    pub fn propagate(&mut self, var: VariableId, val: bool) {
+    pub fn propagate(&mut self, var: VariableID, val: bool) {
         debug_assert!(
             self.current_state[var].is_none(),
             "Trying to propagate the already assigned variable {}.",
@@ -78,7 +78,7 @@ impl PartialAssignment {
     }
 
     /// Starts a new decision level by assigning a chosen variable to `true`.
-    pub fn decide(&mut self, var: VariableId) {
+    pub fn decide(&mut self, var: VariableID) {
         debug_assert!(self.current_state[var].is_none());
 
         // Mark the start of this new decision level.
@@ -93,15 +93,16 @@ impl PartialAssignment {
     /// Backtracks to the highest decision level that hasn't been fully explored.
     pub fn backtrack<F>(&mut self, mut on_unassign_var: F) -> Option<Lit>
     where
-        F: FnMut(VariableId),
+        F: FnMut(VariableID),
     {
         loop {
+            use BacktrackResult::*;
             match self.backtrack_once(&mut on_unassign_var) {
-                BacktrackResult::TryAlternative(falsified_lit) => return Some(falsified_lit),
-                BacktrackResult::NoMoreDecisions => {
+                TryAlternative(falsified_lit) => return Some(falsified_lit),
+                NoMoreDecisions => {
                     return None;
                 }
-                BacktrackResult::Continue => {
+                ContinueBacktracking => {
                     continue;
                 }
             }
@@ -118,7 +119,7 @@ impl PartialAssignment {
     /// Returns `None` if the current level has been fully explored and backtracking should continue to the next higher level.
     pub fn backtrack_once<F>(&mut self, mut on_unassign_var: F) -> BacktrackResult
     where
-        F: FnMut(VariableId),
+        F: FnMut(VariableID),
     {
         // Check if we can backtrack further.
         if self.decision_marks.len() <= self.initial_decision_level {
@@ -144,7 +145,7 @@ impl PartialAssignment {
 
             self.history.pop();
             self.decision_marks.pop();
-            return BacktrackResult::Continue;
+            return BacktrackResult::ContinueBacktracking;
         };
     }
 
@@ -152,7 +153,7 @@ impl PartialAssignment {
     /// Returns the index of the decision variable in the history.
     fn undo_current_unit_propagations<F>(&mut self, mut on_unassign_var: F) -> usize
     where
-        F: FnMut(VariableId),
+        F: FnMut(VariableID),
     {
         let level_start = self.decision_marks.last().unwrap();
 
@@ -166,6 +167,71 @@ impl PartialAssignment {
             on_unassign_var(var);
         }
         *level_start
+    }
+
+    /// Returns the value of the last decision made, or None if no decisions have been made.
+    pub fn last_decision(&self) -> OptBool {
+        if let Some(&decision_idx) = self.decision_marks.last() {
+            let var = self.history[decision_idx];
+            self.current_state[var]
+        } else {
+            OptBool::Unassigned
+        }
+    }
+
+    /// Returns the literal of the last decision made, or None if no decisions have been made.
+    pub fn last_decision_lit(&self) -> Option<Lit> {
+        if let Some(&mark) = self.decision_marks.last() {
+            let var = self.history[mark];
+            let val = self.current_state[var].unwrap();
+            Some(Lit::new(var, val))
+        } else {
+            None
+        }
+    }
+
+    /// Gets the VarState for the given variable without bounds checking.
+    /// # Safety
+    /// The caller must ensure that `var` is a valid index into the current assignment.
+    #[inline(always)]
+    pub fn get_unchecked(&self, var: VariableID) -> OptBool {
+        Self::get_unchecked_from(&self.current_state, var)
+    }
+
+    /// Gets the OptBool for the given variable from the provided assignment slice without bounds checking.
+    /// # Safety
+    /// The caller must ensure that `var` is a valid index into `assignment`.
+    #[inline(always)]
+    pub fn get_unchecked_from(assignment: &[OptBool], var: VariableID) -> OptBool {
+        debug_assert!(
+            var < assignment.len(),
+            "Variable {} out of bounds for assignment of length {}.",
+            var,
+            assignment.len()
+        );
+        unsafe { *assignment.get_unchecked(var) }
+    }
+
+    /// Checks if all variables are assigned.
+    pub fn is_complete(&self) -> bool {
+        self.num_assigned == self.current_state.len()
+    }
+
+    // -------------
+    // --- Utils ---
+    // -------------
+
+    /// Converts the partial assignment to a full solution.
+    /// Unassigned variables default to `false`.
+    pub fn to_solution(&self) -> Vec<bool> {
+        Self::assignment_to_solution(&self.current_state)
+    }
+
+    pub fn assignment_to_solution(assignment: &[OptBool]) -> Vec<bool> {
+        assignment
+            .iter()
+            .map(|&var| var.unwrap_or(false)) // Default unassigned variables to false
+            .collect()
     }
 
     /// Extracts the sequence of variable assignment decisions up to the given decision level into the provided buffer.
@@ -206,56 +272,6 @@ impl PartialAssignment {
             }
         }
     }
-
-    /// Returns the value of the last decision made, or None if no decisions have been made.
-    pub fn last_decision(&self) -> OptBool {
-        if let Some(&decision_idx) = self.decision_marks.last() {
-            let var = self.history[decision_idx];
-            self.current_state[var]
-        } else {
-            OptBool::Unassigned
-        }
-    }
-
-    /// Converts the partial assignment to a full solution.
-    /// Unassigned variables default to `false`.
-    pub fn to_solution(&self) -> Vec<bool> {
-        Self::assignment_to_solution(&self.current_state)
-    }
-
-    pub fn assignment_to_solution(assignment: &[OptBool]) -> Vec<bool> {
-        assignment
-            .iter()
-            .map(|&var| var.unwrap_or(false)) // Default unassigned variables to false
-            .collect()
-    }
-
-    /// Gets the VarState for the given variable without bounds checking.
-    /// # Safety
-    /// The caller must ensure that `var` is a valid index into the current assignment.
-    #[inline(always)]
-    pub fn get_unchecked(&self, var: VariableId) -> OptBool {
-        Self::get_unchecked_from(&self.current_state, var)
-    }
-
-    /// Gets the OptBool for the given variable from the provided assignment slice without bounds checking.
-    /// # Safety
-    /// The caller must ensure that `var` is a valid index into `assignment`.
-    #[inline(always)]
-    pub fn get_unchecked_from(assignment: &[OptBool], var: VariableId) -> OptBool {
-        debug_assert!(
-            var < assignment.len(),
-            "Variable {} out of bounds for assignment of length {}.",
-            var,
-            assignment.len()
-        );
-        unsafe { *assignment.get_unchecked(var) }
-    }
-
-    /// Checks if all variables are assigned.
-    pub fn is_complete(&self) -> bool {
-        self.num_assigned == self.current_state.len()
-    }
 }
 
 impl Index<usize> for PartialAssignment {
@@ -277,7 +293,7 @@ impl Deref for PartialAssignment {
 pub enum BacktrackResult {
     TryAlternative(Lit),
     NoMoreDecisions,
-    Continue,
+    ContinueBacktracking,
 }
 
 #[cfg(test)]

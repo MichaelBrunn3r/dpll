@@ -1,4 +1,4 @@
-pub type VariableId = usize;
+pub type VariableID = usize;
 
 /// A propositional logic literal, i.e. a variable or its negation.
 ///
@@ -17,8 +17,8 @@ impl Lit {
 
     /// Returns the variable ID (0-based) of the literal.
     #[inline(always)]
-    pub fn var(self) -> VariableId {
-        (self.0 >> 1) as VariableId
+    pub fn var(self) -> VariableID {
+        (self.0 >> 1) as VariableID
     }
 
     /// Returns true if the variable is positive.

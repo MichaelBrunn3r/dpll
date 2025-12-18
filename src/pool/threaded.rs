@@ -1,13 +1,14 @@
 use crate::{
     dpll::DPLLSolver,
-    generator, if_metrics,
-    lit::Lit,
-    pool::WorkerPoolStrategy,
+    if_metrics,
+    pool::{
+        WorkerPoolStrategy,
+        cube_and_conquer::{CubeGenerator, DecisionPath},
+    },
     problem::Problem,
-    utils::{Backoff, opt_bool::OptBool},
+    utils::{Backoff, NonZeroUsizeExt},
     worker::{core::WorkerCore, metrics::MetricsLogger, stealing::StealingWorker},
 };
-use itertools::Itertools;
 use log::{error, info};
 use std::{
     num::{NonZero, NonZeroUsize},
@@ -18,7 +19,6 @@ use std::{
     },
     thread::{self},
     time::Duration,
-    vec,
 };
 
 pub struct ThreadedWorkerPool {
@@ -170,55 +170,6 @@ impl ThreadedWorkerPool {
         result
     }
 
-    fn select_split_vars(problem: &Problem, depth: usize) -> Vec<usize> {
-        // Sort variables by score in descending order
-        let sorted_vars = problem
-            .var_scores
-            .iter()
-            .enumerate()
-            .map(|(var, &score)| (var, score))
-            .sorted_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        // Take the variables with the highest scores
-        sorted_vars.take(depth).map(|(var, _)| var).collect()
-    }
-
-    /// Generates all possible assignments for the given split variables,
-    /// skipping those that lead to immediate unsatisfied clauses.
-    fn generate_combinations<'p>(
-        problem: &'p Problem,
-        split_vars: &'p Vec<usize>,
-    ) -> impl Iterator<Item = DecisionPath> + 'p {
-        let clauses_containing_split_vars = split_vars
-            .iter()
-            .flat_map(|&var| problem.clauses_containing_var(var))
-            .unique_by(|c| *c as *const _)
-            .collect::<Vec<_>>();
-
-        let combinations = 1usize << split_vars.len();
-
-        generator!(move || {
-            for combination in 0..combinations {
-                let mut decisions = DecisionPath(Vec::with_capacity(split_vars.len()));
-
-                for (bit_idx, &var) in split_vars.iter().enumerate() {
-                    let val = (combination & (1 << bit_idx)) != 0;
-                    decisions.0.push(Lit::new(var, val));
-                }
-
-                // Check if any clause containing split vars is unsatisfied
-                if clauses_containing_split_vars
-                    .iter()
-                    .any(|clause| clause.is_unsatisfied_by_decisions(&decisions))
-                {
-                    continue; // Skip this assignment as it leads to unsatisfied clauses
-                }
-
-                yield decisions;
-            }
-        })
-    }
-
     /// Calculates the optimal number of splits based on the problem size and number of workers.
     /// Returns None if the problem is too small to benefit from parallelism.
     pub fn calculate_optimal_splits(problem: &Problem, num_workers: NonZeroUsize) -> Option<usize> {
@@ -257,20 +208,34 @@ impl WorkerPoolStrategy for ThreadedWorkerPool {
             ctx_lock.current_pid
         };
 
-        let split_vars = Arc::new(Self::select_split_vars(&problem, num_splits));
-
-        for initial_decisions in Self::generate_combinations(&problem, &split_vars) {
+        for res in CubeGenerator::new(&problem, self.num_workers.ilog2_nz_clamped()).generate() {
             // Check if a solution has been found while generating jobs
             if solution_found.load(atomic::Ordering::Acquire) {
                 break;
             }
 
-            if self
-                .job_sender
-                .send(SubProblem::new(current_pid, initial_decisions))
-                .is_err()
-            {
-                return None;
+            use crate::pool::cube_and_conquer::CubeGenerationResult::*;
+            match res {
+                SAT(solution) => {
+                    // Found a solution while generating cubes
+                    solution_found.store(true, atomic::Ordering::Release);
+                    let _ = solution_sender.send(solution);
+                    break;
+                }
+                UNSAT => {
+                    // Problem is UNSAT
+                    solution_found.store(true, atomic::Ordering::Release);
+                    break;
+                }
+                Cube(decisions) => {
+                    if self
+                        .job_sender
+                        .send(SubProblem::new(current_pid, decisions))
+                        .is_err()
+                    {
+                        return None;
+                    }
+                }
             }
         }
 
@@ -316,32 +281,5 @@ impl SubProblem {
             pid,
             initial_decision,
         }
-    }
-}
-
-/// A sequence of variable assignment decisions made during search.
-/// Can be stolen by idle workers and helps them reconstruct search states.
-#[derive(Debug)]
-pub struct DecisionPath(pub Vec<Lit>);
-
-impl DecisionPath {
-    pub fn to_assignment(&self, num_vars: usize) -> Vec<OptBool> {
-        let mut assignment = vec![OptBool::Unassigned; num_vars];
-        for lit in &self.0 {
-            assignment[lit.var() as usize] = OptBool::from(lit.is_pos());
-        }
-        assignment
-    }
-}
-
-impl From<Vec<Lit>> for DecisionPath {
-    fn from(decisions: Vec<Lit>) -> Self {
-        Self(decisions)
-    }
-}
-
-impl From<Vec<i32>> for DecisionPath {
-    fn from(value: Vec<i32>) -> Self {
-        DecisionPath(value.iter().map(|&x| Lit::from(x)).collect())
     }
 }
