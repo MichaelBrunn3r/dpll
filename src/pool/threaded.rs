@@ -4,14 +4,16 @@ use crate::{
     pool::{
         WorkerPoolStrategy,
         cube_and_conquer::{CubeGenerator, DecisionPath},
+        decide_num_workers,
     },
     problem::Problem,
     utils::{Backoff, NonZeroUsizeExt},
     worker::{core::WorkerCore, metrics::MetricsLogger, stealing::StealingWorker},
 };
 use log::{error, info};
+use nonzero_ext::nonzero;
 use std::{
-    num::{NonZero, NonZeroUsize},
+    num::NonZero,
     sync::{
         Arc, RwLock,
         atomic::{self, AtomicBool, AtomicUsize},
@@ -169,27 +171,13 @@ impl ThreadedWorkerPool {
 
         result
     }
-
-    /// Calculates the optimal number of splits based on the problem size and number of workers.
-    /// Returns None if the problem is too small to benefit from parallelism.
-    pub fn calculate_optimal_splits(problem: &Problem, num_workers: NonZeroUsize) -> Option<usize> {
-        let num_splits = (num_workers.get() as f64).log2().ceil() as usize;
-        if num_splits > problem.num_vars {
-            None
-        } else {
-            Some(num_splits)
-        }
-    }
 }
 
 impl WorkerPoolStrategy for ThreadedWorkerPool {
     fn submit(&self, problem: Arc<Problem>) -> Option<Vec<bool>> {
-        let num_splits = match Self::calculate_optimal_splits(&problem, self.num_workers) {
-            Some(n) => n,
-            None => {
-                // Problem too small to benefit from parallelism => solve directly
-                return DPLLSolver::with_decisions(&problem, &DecisionPath(Vec::new())).solve();
-            }
+        let optimal_num_workers = decide_num_workers(&problem, self.num_workers);
+        if optimal_num_workers <= nonzero!(1usize) {
+            return DPLLSolver::with_decisions(&problem, &DecisionPath(Vec::new())).solve();
         };
 
         // Notify all workers of the new problem
