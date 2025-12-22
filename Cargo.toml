@@ -1,47 +1,14 @@
 cargo-features = ["profile-rustflags"]
 
-[package]
-name = "dpll"
-version = "0.1.0"
-edition = "2024"
-default-run = "dpll"
+[workspace]
+members = ["pkgs/*"]
+resolver = "2"
 
-[dependencies]
-clap = { version = "4.5.53", features = ["derive"] }
-comfy-table = { version = "7.2.1", features = ["custom_styling"] }
-crossbeam-channel = "0.5.15"
-crossbeam-deque = "0.8.6"
-crossbeam-utils = "0.8.21"
-env_logger = "0.11.8"
-fastrand = "2.3.0"
-indicatif = { version = "0.18.3", features = ["improved_unicode"] }
-indicatif-log-bridge = "0.2.3"
-itertools = "0.14.0"
-log = "0.4.28"
-memmap2 = "0.9.9"
-nonzero_ext = "0.3.0"
-num-format = "0.4.4"
-
-[dev-dependencies]
+[workspace.dependencies]
+log = "0.4.28"        # logging
+nonzero_ext = "0.3.0" # non-zero helpers
 criterion = "0.8.0"
-
-[features]
-default = []
-metrics = []
-
-# --- Benchmarks ---
-
-[[bench]]
-name = "bench"
-harness = false
-
-[[bench]]
-name = "optbool_from"
-harness = false
-
-[[bench]]
-name = "optbool_unwrap_or"
-harness = false
+fastrand = "2.3.0"
 
 # --- Profiles ---
 

@@ -1,0 +1,26 @@
+[package]
+name = "dpll_core"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+itertools = "0.14.0"
+
+[dev-dependencies]
+criterion = { workspace = true }
+fastrand = { workspace = true }
+
+[[bench]]
+name = "parse"
+harness = false
+
+[[bench]]
+name = "optbool_from"
+harness = false
+
+[[bench]]
+name = "optbool_unwrap_or"
+harness = false
